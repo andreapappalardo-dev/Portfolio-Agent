@@ -246,11 +246,20 @@ def render_trading_floor(sim, market_snap, prices_df=None, scores_df=None):
     st.caption("α = 0.40×momentum + 0.25×gap + 0.15×trend + 0.10×RSI + 0.10×volume.  Top 12 passed to Claude.")
     if scores_df is not None and not scores_df.empty:
         top20 = scores_df.head(20).copy(); top20.index = range(1, len(top20)+1)
+        # Normalise column names — CSV uses ticker/alpha, older code used symbol/score
+        if "ticker" in top20.columns and "symbol" not in top20.columns:
+            top20 = top20.rename(columns={"ticker": "symbol"})
+        if "alpha" in top20.columns and "score" not in top20.columns:
+            top20["score"] = top20["alpha"]
+        # Add missing columns with None so display never crashes
+        for col in ["ret_20d", "vol_20d", "ret_1d"]:
+            if col not in top20.columns:
+                top20[col] = None
         top20["Price"]       = top20["price"].apply(lambda x: f"${x:.2f}")
-        top20["5d Return"]   = top20["ret_5d"].apply(lambda x: f"{x*100:+.1f}%" if x is not None else "—")
-        top20["20d Return"]  = top20["ret_20d"].apply(lambda x: f"{x*100:+.1f}%" if x is not None else "—")
+        top20["5d Return"]   = top20["ret_5d"].apply(lambda x: f"{x:+.1f}%" if x is not None else "—")
+        top20["20d Return"]  = top20["ret_20d"].apply(lambda x: f"{x:+.1f}%" if x is not None else "—")
         top20["Ann. Vol"]    = top20["vol_20d"].apply(lambda x: f"{x*100:.0f}%" if x is not None else "—")
-        top20["Alpha Score"] = top20["score"].apply(lambda x: f"{x*100:+.2f}%")
+        top20["Alpha Score"] = top20["score"].apply(lambda x: f"{x:+.4f}")
         st.dataframe(top20[["symbol","Price","5d Return","20d Return","Ann. Vol","Alpha Score"]].rename(
             columns={"symbol":"Ticker"}), use_container_width=True, hide_index=False)
         st.caption(f"Top 20 of {len(scores_df):,} stocks screened.")
