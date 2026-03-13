@@ -391,7 +391,50 @@ def main() -> None:
     print()
     print(data_summary)
 
-    # ── 3b. Extend market_snap with screener prices ───────────────────────────
+    # ── 3b. Run full 525-stock screener → screener_results.csv ───────────────
+    section("Step 3b — Full Alpha Screener · 525 Stocks")
+    try:
+        from agents import compute_alpha_score
+        from initialize_portfolio import UNIVERSE
+
+        info(f"Scoring {len(UNIVERSE)} tickers in batches of 100…")
+        scr_rows = []
+        for i in range(0, len(UNIVERSE), 100):
+            batch = UNIVERSE[i:i + 100]
+            try:
+                bdf = fetch_prices(tuple(batch), lookback_days=30)
+            except Exception:
+                continue
+            for t in batch:
+                if t not in bdf.columns:
+                    continue
+                col = bdf[t].dropna()
+                if len(col) < 21:
+                    continue
+                price = float(col.iloc[-1])
+                if price < 2:
+                    continue
+                sigs = compute_alpha_score(col.tolist(), [], 0)
+                scr_rows.append({
+                    "ticker":  t,
+                    "price":   round(price, 2),
+                    "alpha":   round(sigs.get("alpha", 0), 4),
+                    "ret_5d":  round(sigs.get("ret_5d") or 0, 2),
+                    "rsi14":   round(sigs.get("rsi14") or 0, 1),
+                    "atr_pct": round(sigs.get("atr_pct") or 0, 2),
+                })
+
+        if scr_rows:
+            scr_df = pd.DataFrame(scr_rows).sort_values("alpha", ascending=False)
+            scr_df.to_csv("screener_results.csv", index=False)
+            ok(f"Screener done — {len(scr_rows)} tickers scored, top: "
+               f"{', '.join(scr_df.head(5)['ticker'].tolist())}")
+        else:
+            info("Screener returned no rows — watchlist only")
+    except Exception as e:
+        info(f"Screener failed ({e}) — watchlist only")
+
+    # ── 3c. Extend market_snap with screener prices ───────────────────────────
     # The Strategy Agent picks from 525 tickers; the Risk Agent needs a price
     # for any ticker Claude proposes, not just the 25 in ASSETS.
     try:
