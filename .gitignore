@@ -1,0 +1,12 @@
+# Secret keys - never commit
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Database (contains live trading data)
+finance_game.db
+
+# Generated at runtime
+screener_results.csv
