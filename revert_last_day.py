@@ -52,7 +52,7 @@ for t in trades:
     elif action == "SELL":
         # Reverse SELL: restore shares to positions, deduct cash
         existing = cur.execute(
-            "SELECT shares, average_cost FROM positions WHERE symbol = ?", (symbol,)
+            "SELECT shares, avg_cost FROM positions WHERE symbol = ?", (symbol,)
         ).fetchone()
         if existing:
             cur.execute(
@@ -61,7 +61,7 @@ for t in trades:
             )
         else:
             cur.execute(
-                "INSERT INTO positions (symbol, shares, average_cost) VALUES (?, ?, ?)",
+                "INSERT INTO positions (symbol, shares, avg_cost) VALUES (?, ?, ?)",
                 (symbol, shares, price)
             )
         cur.execute("UPDATE simulation SET cash_balance = cash_balance - ?", (value - tc,))

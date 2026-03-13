@@ -1,5 +1,5 @@
 """
-agents.py — Four-agent pipeline  ·  MiF AI Portfolio  ·  Group C
+agents.py — Four-agent pipeline  ·  MiF AI Portfolio  ·  Group B
 
 Alpha Score (same formula as backtest.py — live system = backtested system):
   ┌─────────────────────────────────────────────────────────────────────┐
@@ -26,7 +26,7 @@ from database import get_positions, get_trades_today, record_trade
 from portfolio_manager import get_market_snapshot, format_pct, format_dollar
 
 # ── Competition parameters ────────────────────────────────────────────────────
-MAX_POSITION_PCT = 0.40
+MAX_POSITION_PCT = 0.15
 MAX_TRADES_DAY   = 2
 TC_BPS           = 10.0
 
@@ -429,9 +429,11 @@ class StrategyAgent:
 ════════════════ CURRENT STRATEGY SUMMARY ════════════════
 Strategy name:    Alpha Score Momentum
 Execution model:  Once-daily at market open (daily close signals + today's open gap)
-Universe:         ~60 liquid stocks across 8 sectors (no micro-caps)
-Max positions:    2 simultaneous, up to {MAX_POSITION_PCT*100:.0f}% each
-Stop-loss:        -6% hard stop (checked each morning vs yesterday's close)
+Universe:         ~525 liquid stocks across S&P 500 + ETFs
+Max trades/day:   {MAX_TRADES_DAY} (you can BUY and/or SELL up to {MAX_TRADES_DAY} times per day)
+Open positions:   Up to 15–20 simultaneous positions (diversified portfolio)
+Position sizing:  Each position typically 5–15% of portfolio
+Stop-loss:        -8% hard stop (checked each morning vs yesterday's close)
 Weights source:   {weights_note}
 
 Alpha Score formula (each component normalised to [-1, +1]):
@@ -446,6 +448,8 @@ Alpha Score formula (each component normalised to [-1, +1]):
     rel_volume  = clip((vol/avg_vol - 1) / 2, -1, +1)   ← high volume confirms the move
 
   Thresholds:  BUY if α > {BUY_THRESHOLD}  |  SELL if α < {SELL_THRESHOLD}
+  NOTE: Some positions were opened at initialization with α between 0.10–0.45 (fill positions).
+  Do NOT exit these solely because α < {BUY_THRESHOLD} — only exit if α < {SELL_THRESHOLD} or stop/target hit.
 ══════════════════════════════════════════════════════════
 
 EXECUTION MODEL: Code runs ONCE per day at market open. You cannot monitor intraday.
@@ -483,9 +487,11 @@ Full alpha table with all stocks:
    • ATR > 3% → cap position at 25% regardless of alpha
 
 3. SIZING:
-   • alpha > 0.70 → up to 40% (high conviction)
-   • alpha 0.45–0.70 → 25–35%
-   • ATR > 3% → max 25%
+   • alpha > 0.70 → up to 15% (high conviction)
+   • alpha 0.45–0.70 → 7–12%
+   • alpha 0.10–0.45 (fill position) → 5–7%
+   • ATR > 3% → cap at 7% regardless of alpha
+   • Never let a single position exceed 15% of portfolio
 
 ═══════════════ YOUR TASK ═══════════════
 STEP 0 — EXITS (no web search needed):

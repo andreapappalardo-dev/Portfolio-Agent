@@ -10,16 +10,18 @@ Alpha Score (all components normalised to [-1, +1] before weighting):
   0.10 × RSI sweet spot      — +1 if 40-65, +0.5 if 35-40, -1 if >70
   0.10 × relative volume     — above-avg volume confirms momentum
 
-Execution model (mirrors live competition system):
-  - Day 1: INITIALIZATION — $1M deployed into 10-20 top-alpha stocks
-           with rank-based weights (best alpha → largest allocation)
-  - Day 2+: DAILY REBALANCING — up to 2 trades/day to:
-           (a) exit positions whose alpha dropped below SELL_THRESHOLD or stop hit
-           (b) buy highest-alpha new candidates to replace exits
-           (c) rebalance weight drift toward current rank-based targets
-  - Entry / exit price = today's OPEN
-  - Intraday stop = if today's LOW < stop price, exit AT stop price
+Execution model (mirrors live system):
+  - Signals computed from yesterday's close + today's open gap
+  - Entry price  = today's OPEN  (code runs at market open)
+  - Intraday stop  = if today's LOW < stop price, exit AT stop price
   - End-of-day mark = today's CLOSE (for P&L reporting)
+  - Next day decision uses fresh alpha
+
+Strategy:
+  - Hold up to MAX_POSITIONS (2) at once, max 40% each
+  - BUY  if alpha > BUY_THRESHOLD  and not already held
+  - SELL if alpha < SELL_THRESHOLD or stop breached intraday
+  - Rank by alpha descending, fill positions until cash runs out
 """
 
 import math
@@ -88,26 +90,15 @@ OIL_BACKTEST_ONLY = [
 UNIVERSE = list(dict.fromkeys(SP500_STOCKS + ETFS + OIL_BACKTEST_ONLY))
 
 # ── Strategy parameters ───────────────────────────────────────────────────────
-STARTING_CAPITAL    = 1_000_000.0
-MAX_POSITION_PCT    = 0.40      # hard cap per single position
-TC_BPS              = 10.0      # transaction cost in basis points
-STOP_LOSS_PCT       = -0.06     # -6% hard stop from entry price
-TARGET_GAIN_PCT     = 0.12      # +12% take-profit target (informational)
-BUY_THRESHOLD       = 0.45      # alpha score to enter a new position
-SELL_THRESHOLD      = 0.10      # alpha below this → exit at next open
-LOOKBACK_DAYS       = 35        # history needed for indicators (SMA20 + buffer)
-BACKTEST_DAYS       = 10        # number of trading days to simulate
-
-# ── Portfolio construction ────────────────────────────────────────────────────
-INIT_MIN_POSITIONS  = 10        # minimum stocks bought at initialization
-INIT_MAX_POSITIONS  = 20        # maximum stocks bought at initialization
-MAX_ACTIVE_POSITIONS= 20        # max simultaneous holdings during rebalancing
-DAILY_TRADE_LIMIT   = 2         # max trades per day (mirrors competition)
-DEPLOY_FRAC         = 0.90      # deploy 90% of capital at init; keep 10% buffer
-REBAL_THRESHOLD     = 0.05      # trigger rebalance trade if weight drifts >5%
-
-# ── Broad index ETFs excluded from stock selection (can be held as ETF picks) ─
-INDEX_ONLY = {"SPY", "QQQ", "IWM", "DIA", "VTI"}
+STARTING_CAPITAL  = 1_000_000.0
+MAX_POSITION_PCT  = 0.40
+MAX_POSITIONS     = 2
+TC_BPS            = 10.0        # transaction cost in basis points
+STOP_LOSS_PCT     = -0.06       # -6% hard stop from entry price
+BUY_THRESHOLD     = 0.45        # alpha score to open a position
+SELL_THRESHOLD    = 0.10        # alpha below this → exit next open
+LOOKBACK_DAYS     = 35          # history needed for indicators (SMA20 + buffer)
+BACKTEST_DAYS     = 10          # number of trading days to simulate
 
 # ── Alpha score weights ───────────────────────────────────────────────────────
 W_MOMENTUM = 0.40
@@ -250,447 +241,93 @@ def download_data(tickers: list, lookback: int = 40) -> dict:
 # Backtester
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Backtester
-# ─────────────────────────────────────────────────────────────────────────────
-
 class Backtester:
 
     def __init__(self, data: dict):
         self.data    = data
         self.tickers = list(data.keys())
 
+        # Build aligned date index from all tickers
         all_dates = sorted(set(
             d for df in data.values() for d in df.index
         ))
         self.all_dates = all_dates
 
+        # Last BACKTEST_DAYS dates are the backtest window
+        # We need at least 21 prior dates for indicators
         if len(all_dates) < BACKTEST_DAYS + 21:
             raise ValueError("Not enough historical data — need at least 31 trading days.")
-        self.bt_dates   = all_dates[-BACKTEST_DAYS:]
+        self.bt_dates  = all_dates[-BACKTEST_DAYS:]
         self.hist_dates = all_dates[:-BACKTEST_DAYS]
 
     # ── Per-day signal computation ────────────────────────────────────────────
 
     def signals_for_day(self, day_idx: int) -> pd.DataFrame:
+        """
+        Compute alpha scores for all tickers on a given backtest day.
+        day_idx: index into self.bt_dates (0 = first backtest day).
+
+        Uses data available at market open:
+          - All historical closes up to (not including) today
+          - Today's open price
+        """
         today    = self.bt_dates[day_idx]
+        # Available history = all_dates up to (but not including) today
+        hist_end = self.all_dates.index(today)   # exclusive upper bound
+
         rows = []
         for t in self.tickers:
             df = self.data[t]
             if today not in df.index:
                 continue
+
+            # Historical data available at open
             hist = df[df.index < today]
             if len(hist) < 21:
                 continue
-            today_row   = df.loc[today]
-            today_open  = float(today_row["Open"])
-            today_high  = float(today_row["High"])
-            today_low   = float(today_row["Low"])
-            today_close = float(today_row["Close"])
-            today_vol   = float(today_row["Volume"])
+
+            today_row  = df.loc[today]
+            today_open = float(today_row["Open"])
+            today_high = float(today_row["High"])
+            today_low  = float(today_row["Low"])
+            today_close= float(today_row["Close"])
+            today_vol  = float(today_row["Volume"])
+
+            # Include today's volume in the volume signal
+            hist_with_vol = hist.copy()
 
             sig = compute_alpha(hist["Close"], hist["Volume"], today_open)
             sig.update({
-                "symbol":  t,
-                "date":    today,
-                "open":    today_open,
-                "high":    today_high,
-                "low":     today_low,
-                "close":   today_close,
-                "volume":  today_vol,
+                "symbol":      t,
+                "date":        today,
+                "open":        today_open,
+                "high":        today_high,
+                "low":         today_low,
+                "close":       today_close,
+                "volume":      today_vol,
             })
             rows.append(sig)
 
         if not rows:
             return pd.DataFrame()
-        return pd.DataFrame(rows).sort_values("alpha", ascending=False).reset_index(drop=True)
+        df_sig = pd.DataFrame(rows).sort_values("alpha", ascending=False)
+        return df_sig.reset_index(drop=True)
 
-    # ── Rank-based weight calculator ──────────────────────────────────────────
-
-    def _rank_weights(self, n: int, deploy: float = DEPLOY_FRAC,
-                      cap: float = MAX_POSITION_PCT) -> list:
-        """
-        Return rank-based weights for n stocks that sum to `deploy`.
-        Stock #1 receives the most capital; last stock the least.
-        Weights are capped at `cap` and surplus redistributed.
-        """
-        scores = [n - i for i in range(n)]          # n, n-1, ..., 1
-        total  = sum(scores)
-        w      = [s / total * deploy for s in scores]
-        for _ in range(10):
-            surplus  = sum(max(0, x - cap) for x in w)
-            w        = [min(x, cap) for x in w]
-            uncapped = [i for i, x in enumerate(w) if x < cap]
-            if surplus < 1e-9 or not uncapped:
-                break
-            uc_sum = sum(w[i] for i in uncapped)
-            for i in uncapped:
-                w[i] += surplus * (w[i] / uc_sum) if uc_sum else surplus / len(uncapped)
-        return w
-
-    # ── Portfolio valuation helper ────────────────────────────────────────────
-
-    def _total_value(self, positions: dict, signals: pd.DataFrame, cash: float) -> float:
-        alpha_px = {r["symbol"]: r["close"] for _, r in signals.iterrows()}
-        hold_val = sum(
-            p["shares"] * alpha_px.get(sym, p["entry"])
-            for sym, p in positions.items()
-        )
-        return cash + hold_val
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # INITIALIZATION PHASE  (Day 1 only)
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _initialize(self, signals: pd.DataFrame, cash: float,
-                    total: float, today) -> tuple:
-        """
-        Deploy ~90% of $1M into 10-20 top-alpha stocks using rank-based weights.
-        Returns (positions dict, remaining cash, list of trade-log entries).
-        """
-        # Eligible: positive alpha, exclude pure broad-index ETFs
-        eligible = signals[
-            (signals["alpha"] > 0) &
-            (~signals["symbol"].isin(INDEX_ONLY))
-        ].head(INIT_MAX_POSITIONS)
-
-        # Fallback: if fewer than INIT_MIN have positive alpha, take top N by alpha
-        if len(eligible) < INIT_MIN_POSITIONS:
-            eligible = signals[
-                ~signals["symbol"].isin(INDEX_ONLY)
-            ].head(INIT_MAX_POSITIONS)
-
-        picks   = eligible.to_dict("records")
-        n       = len(picks)
-        weights = self._rank_weights(n)
-
-        positions = {}
-        trades    = []
-
-        print(f"\n  ╔══ INITIALIZATION — deploying into {n} stocks ══╗")
-        for rank, (pick, w) in enumerate(zip(picks, weights), 1):
-            sym      = pick["symbol"]
-            entry_px = pick["open"]
-            if entry_px <= 0:
-                continue
-            alloc = w * total
-            if alloc > cash:
-                print(f"    #{rank:2d} {sym:<6}  SKIPPED (insufficient cash)")
-                continue
-
-            shares   = alloc / entry_px
-            tc       = alloc * TC_BPS / 10_000
-            cash    -= alloc + tc
-            stop_px  = round(entry_px * (1 + STOP_LOSS_PCT), 4)
-            tgt_px   = round(entry_px * (1 + TARGET_GAIN_PCT), 4)
-
-            positions[sym] = {
-                "shares":        shares,
-                "entry":         entry_px,
-                "stop":          stop_px,
-                "target":        tgt_px,
-                "entry_date":    today,
-                "alpha_entry":   pick["alpha"],
-                "target_weight": w,     # updated daily during rebalancing
-            }
-
-            mom_dir = "↑" if pick["momentum"] > 0 else "↓"
-            print(f"    #{rank:2d} {sym:<6}  α={pick['alpha']:+.3f}  "
-                  f"wt={w*100:.1f}%  px=${entry_px:.2f}  "
-                  f"sh={shares:.1f}  mom{mom_dir}{pick['ret_5d']:+.1f}%")
-
-            trades.append({
-                "date":    today,
-                "action":  "BUY (INIT)",
-                "symbol":  sym,
-                "price":   entry_px,
-                "shares":  shares,
-                "value":   alloc,
-                "pnl_pct": None,
-                "reason":  (
-                    f"[INIT] Rank #{rank} of {n}. "
-                    f"Alpha={pick['alpha']:.3f}, 5d-mom={pick['ret_5d']:+.1f}%, "
-                    f"RSI={pick['rsi_raw']:.0f}. "
-                    f"Target weight {w*100:.1f}%. "
-                    f"Stop at ${stop_px:.2f} (-6%), target ${tgt_px:.2f} (+12%)."
-                ),
-            })
-
-        deployed = total - cash
-        print(f"  ╚══ Deployed ${deployed:,.0f} ({deployed/total*100:.1f}%)  "
-              f"Cash remaining: ${cash:,.0f} ══╝")
-        return positions, cash, trades
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # DAILY REBALANCING  (Day 2 onwards)
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _rebalance(self, positions: dict, signals: pd.DataFrame,
-                   cash: float, total: float, today,
-                   trade_log: list) -> tuple:
-        """
-        Execute up to DAILY_TRADE_LIMIT rebalancing trades.
-
-        Priority order:
-          1. Exit positions where intraday low breached the stop price
-          2. Exit positions whose alpha fell below SELL_THRESHOLD
-          3. Buy the highest-alpha new candidate not yet held
-             (replaces exits; fills empty slots up to MAX_ACTIVE_POSITIONS)
-          4. Rebalance weight drift: trim overweight / add to underweight
-             (only if trade slots remain after steps 1-3)
-        """
-        alpha_map  = {r["symbol"]: r         for _, r in signals.iterrows()}
-        trades_left = DAILY_TRADE_LIMIT
-        new_trades  = []
-
-        # ── 1. Intraday stop-loss exits ───────────────────────────────────────
-        stops_hit = []
-        for sym, pos in list(positions.items()):
-            row = alpha_map.get(sym)
-            if row is None:
-                continue
-            if row["low"] <= pos["stop"]:
-                exit_px  = pos["stop"]
-                proceeds = pos["shares"] * exit_px
-                tc       = proceeds * TC_BPS / 10_000
-                cash    += proceeds - tc
-                pnl_pct  = (exit_px / pos["entry"] - 1) * 100
-                days_h   = (today - pos["entry_date"]).days
-                new_trades.append({
-                    "date":    today, "action": "SELL (STOP)",
-                    "symbol":  sym,   "price":   exit_px,
-                    "shares":  pos["shares"], "value": proceeds,
-                    "pnl_pct": pnl_pct,
-                    "reason":  (
-                        f"Stop-loss hit after {days_h}d. "
-                        f"Intraday low ${row['low']:.2f} ≤ stop ${pos['stop']:.2f} "
-                        f"(-6% from entry ${pos['entry']:.2f}). "
-                        f"Exit P&L: {pnl_pct:+.2f}%."
-                    ),
-                })
-                stops_hit.append(sym)
-        for sym in stops_hit:
-            del positions[sym]
-        # Stop-loss exits don't count against the 2-trade limit
-
-        # ── 2. Alpha-threshold SELL (counts against trade limit) ──────────────
-        to_sell = [
-            (sym, alpha_map[sym]["alpha"])
-            for sym in list(positions.keys())
-            if sym in alpha_map and alpha_map[sym]["alpha"] < SELL_THRESHOLD
-        ]
-        # Sell weakest first
-        to_sell.sort(key=lambda x: x[1])
-        for sym, alpha_val in to_sell:
-            if trades_left == 0:
-                break
-            row      = alpha_map[sym]
-            exit_px  = row["open"]
-            proceeds = positions[sym]["shares"] * exit_px
-            tc       = proceeds * TC_BPS / 10_000
-            cash    += proceeds - tc
-            pnl_pct  = (exit_px / positions[sym]["entry"] - 1) * 100
-            days_h   = (today - positions[sym]["entry_date"]).days
-            new_trades.append({
-                "date":    today, "action": "SELL (ALPHA)",
-                "symbol":  sym,   "price":   exit_px,
-                "shares":  positions[sym]["shares"], "value": proceeds,
-                "pnl_pct": pnl_pct,
-                "reason":  (
-                    f"Alpha {alpha_val:.3f} below sell threshold {SELL_THRESHOLD}. "
-                    f"Held {days_h}d. Exit P&L: {pnl_pct:+.2f}%."
-                ),
-            })
-            del positions[sym]
-            trades_left -= 1
-
-        # ── 3. Re-rank and update target weights ──────────────────────────────
-        # Universe = current holdings with good alpha + fresh top candidates
-        held_syms = set(positions.keys())
-
-        held_rows = [
-            alpha_map[s] for s in held_syms
-            if s in alpha_map and alpha_map[s]["alpha"] >= SELL_THRESHOLD
-        ]
-        new_candidates = [
-            r for _, r in signals.iterrows()
-            if r["symbol"] not in held_syms
-            and r["symbol"] not in INDEX_ONLY
-            and r["alpha"] > BUY_THRESHOLD
-        ]
-
-        # Combine: held (sorted by alpha desc) + candidates (sorted by alpha desc)
-        held_rows.sort(key=lambda r: r["alpha"], reverse=True)
-        combined = held_rows + new_candidates
-        combined = combined[:MAX_ACTIVE_POSITIONS]
-
-        # Assign new target weights
-        n_combined = len(combined)
-        if n_combined > 0:
-            new_weights = self._rank_weights(n_combined)
-            for row, w in zip(combined, new_weights):
-                sym = row["symbol"]
-                if sym in positions:
-                    positions[sym]["target_weight"] = w
-
-        # ── 4. BUY new candidates to fill vacated / empty slots ───────────────
-        slots_available = MAX_ACTIVE_POSITIONS - len(positions)
-        for row in new_candidates:
-            if trades_left == 0 or slots_available <= 0:
-                break
-            sym      = row["symbol"]
-            entry_px = row["open"]
-            if entry_px <= 0:
-                continue
-
-            # Find target weight for this candidate in combined ranking
-            try:
-                rank_idx  = next(i for i, r in enumerate(combined) if r["symbol"] == sym)
-                tgt_w     = new_weights[rank_idx]
-            except (StopIteration, NameError):
-                tgt_w = min(MAX_POSITION_PCT, DEPLOY_FRAC / max(len(positions) + 1, 1))
-
-            alloc = tgt_w * total
-            alloc = min(alloc, cash * 0.99)
-            if alloc < entry_px:
-                continue
-
-            shares   = alloc / entry_px
-            tc       = alloc * TC_BPS / 10_000
-            cash    -= alloc + tc
-            stop_px  = round(entry_px * (1 + STOP_LOSS_PCT), 4)
-            tgt_px   = round(entry_px * (1 + TARGET_GAIN_PCT), 4)
-
-            positions[sym] = {
-                "shares":        shares,
-                "entry":         entry_px,
-                "stop":          stop_px,
-                "target":        tgt_px,
-                "entry_date":    today,
-                "alpha_entry":   row["alpha"],
-                "target_weight": tgt_w,
-            }
-
-            trend_w = "above" if row["trend"] > 0 else "below"
-            gap_w   = f"gap-up {row['gap_raw']:+.1f}%" if row["gap_raw"] > 1 else (
-                      f"gap-down {row['gap_raw']:+.1f}%" if row["gap_raw"] < -1 else "flat open")
-            new_trades.append({
-                "date":    today, "action": "BUY",
-                "symbol":  sym,   "price":   entry_px,
-                "shares":  shares, "value":  alloc,
-                "pnl_pct": None,
-                "reason":  (
-                    f"Alpha {row['alpha']:.3f} > threshold {BUY_THRESHOLD}. "
-                    f"5d-mom {row['ret_5d']:+.1f}%, {gap_w}, RSI {row['rsi_raw']:.0f} "
-                    f"({'sweet spot' if 40 <= row['rsi_raw'] <= 65 else 'outside sweet spot'}), "
-                    f"trading {trend_w} SMA-20. "
-                    f"Target weight {tgt_w*100:.1f}%. Stop ${stop_px:.2f}."
-                ),
-            })
-            trades_left     -= 1
-            slots_available -= 1
-
-        # ── 5. Weight-drift rebalancing (uses remaining trade slots) ──────────
-        if trades_left > 0 and n_combined > 0:
-            # Compute current weights
-            cur_weights = {}
-            for sym, pos in positions.items():
-                px = alpha_map[sym]["close"] if sym in alpha_map else pos["entry"]
-                cur_weights[sym] = (pos["shares"] * px) / total
-
-            # Find biggest positive drift (overweight) and negative drift (underweight)
-            drifts = {}
-            for sym, pos in positions.items():
-                target = pos.get("target_weight", 0)
-                actual = cur_weights.get(sym, 0)
-                drifts[sym] = actual - target   # positive = overweight
-
-            # TRIM overweight positions (sell partial)
-            overweight = [(s, d) for s, d in drifts.items() if d > REBAL_THRESHOLD]
-            overweight.sort(key=lambda x: -x[1])   # biggest overweight first
-            for sym, drift in overweight:
-                if trades_left == 0:
-                    break
-                pos      = positions[sym]
-                row      = alpha_map.get(sym)
-                if row is None:
-                    continue
-                exit_px  = row["open"]
-                # Sell enough to bring weight back to target
-                trim_val = drift * total
-                trim_sh  = trim_val / exit_px
-                if trim_sh <= 0 or trim_sh >= pos["shares"]:
-                    continue
-                tc        = trim_val * TC_BPS / 10_000
-                cash     += trim_val - tc
-                pos["shares"] -= trim_sh
-                pnl_pct   = (exit_px / pos["entry"] - 1) * 100
-                new_trades.append({
-                    "date":    today, "action": "TRIM",
-                    "symbol":  sym,   "price":   exit_px,
-                    "shares":  trim_sh, "value":  trim_val,
-                    "pnl_pct": pnl_pct,
-                    "reason":  (
-                        f"Weight drift rebalance: overweight by {drift*100:.1f}%. "
-                        f"Trimming {trim_sh:.1f} shares to restore target "
-                        f"{pos['target_weight']*100:.1f}% weight."
-                    ),
-                })
-                trades_left -= 1
-
-            # ADD to underweight positions (buy partial)
-            underweight = [(s, d) for s, d in drifts.items() if d < -REBAL_THRESHOLD]
-            underweight.sort(key=lambda x: x[1])   # biggest underweight first
-            for sym, drift in underweight:
-                if trades_left == 0:
-                    break
-                pos      = positions[sym]
-                row      = alpha_map.get(sym)
-                if row is None:
-                    continue
-                entry_px = row["open"]
-                add_val  = abs(drift) * total
-                add_val  = min(add_val, cash * 0.99)
-                if add_val < entry_px:
-                    continue
-                add_sh   = add_val / entry_px
-                tc       = add_val * TC_BPS / 10_000
-                cash    -= add_val + tc
-                pos["shares"] += add_sh
-                new_trades.append({
-                    "date":    today, "action": "ADD",
-                    "symbol":  sym,   "price":   entry_px,
-                    "shares":  add_sh, "value":   add_val,
-                    "pnl_pct": None,
-                    "reason":  (
-                        f"Weight drift rebalance: underweight by {abs(drift)*100:.1f}%. "
-                        f"Adding {add_sh:.1f} shares to restore target "
-                        f"{pos['target_weight']*100:.1f}% weight."
-                    ),
-                })
-                trades_left -= 1
-
-        trade_log.extend(new_trades)
-        return positions, cash
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # MAIN BACKTEST LOOP
-    # ─────────────────────────────────────────────────────────────────────────
+    # ── Main backtest loop ────────────────────────────────────────────────────
 
     def run(self) -> dict:
-        cash      = STARTING_CAPITAL
-        positions = {}           # {symbol: {shares, entry, stop, target, entry_date, ...}}
-        daily_log = []
-        trade_log = []
+        cash       = STARTING_CAPITAL
+        positions  = {}    # {symbol: {"shares": float, "entry": float, "stop": float, "entry_date": date}}
+        daily_log  = []
+        trade_log  = []
 
         print("=" * 72)
-        print("  ALPHA SCORE BACKTEST — 10 Trading Days  (Group B)")
-        print(f"  Universe: {len(self.tickers)} stocks")
+        print("  ALPHA SCORE BACKTEST — 10 Trading Days")
+        print(f"  Universe: {len(self.tickers)} liquid stocks")
         print(f"  Start capital: ${STARTING_CAPITAL:,.0f}")
-        print(f"  Init: {INIT_MIN_POSITIONS}–{INIT_MAX_POSITIONS} stocks, rank-based weights")
-        print(f"  Rebalancing: up to {DAILY_TRADE_LIMIT} trades/day")
-        print(f"  Stop: {STOP_LOSS_PCT*100:.0f}%   TC: {TC_BPS} bps")
-        print(f"  Buy α > {BUY_THRESHOLD}   Sell α < {SELL_THRESHOLD}")
+        print(f"  Max positions: {MAX_POSITIONS} × {MAX_POSITION_PCT*100:.0f}%")
+        print(f"  Stop-loss: {STOP_LOSS_PCT*100:.0f}%   TC: {TC_BPS} bps")
+        print(f"  Buy threshold α > {BUY_THRESHOLD}   Sell threshold α < {SELL_THRESHOLD}")
         print("=" * 72)
 
         for day_idx, today in enumerate(self.bt_dates):
@@ -701,84 +338,188 @@ class Backtester:
                 print(f"\n  {date_str}  — no signal data, skipping")
                 continue
 
-            total = self._total_value(positions, signals, cash)
+            # ── Step 1: check intraday stops on held positions ─────────────
+            stops_hit = []
+            for sym, pos in list(positions.items()):
+                row = signals[signals["symbol"] == sym]
+                if row.empty:
+                    continue
+                row      = row.iloc[0]
+                day_low  = row["low"]
+                stop_px  = pos["stop"]
 
-            # ── Day 1: initialization ─────────────────────────────────────────
-            if day_idx == 0:
-                positions, cash, init_trades = self._initialize(
-                    signals, cash, total, today
-                )
-                trade_log.extend(init_trades)
+                if day_low <= stop_px:
+                    # Stop hit intraday — exit at stop price
+                    exit_px  = stop_px
+                    proceeds = pos["shares"] * exit_px
+                    tc       = proceeds * TC_BPS / 10_000
+                    cash    += proceeds - tc
+                    pnl_pct  = (exit_px / pos["entry"] - 1) * 100
+                    days_held = (today - pos["entry_date"]).days
+                    trade_log.append({
+                        "date": today, "action": "SELL (STOP)", "symbol": sym,
+                        "price": exit_px, "shares": pos["shares"],
+                        "value": proceeds, "pnl_pct": pnl_pct,
+                        "reason": (
+                            f"Stop-loss triggered after {days_held} day(s). "
+                            f"Intraday low of ${day_low:.2f} breached the hard stop "
+                            f"at ${stop_px:.2f} ({STOP_LOSS_PCT*100:.0f}% below entry "
+                            f"of ${pos['entry']:.2f}). "
+                            f"Position closed with a {'gain' if pnl_pct >= 0 else 'loss'} "
+                            f"of {abs(pnl_pct):.2f}%."
+                        ),
+                    })
+                    stops_hit.append(sym)
 
-            # ── Day 2+: daily rebalancing ─────────────────────────────────────
-            else:
-                positions, cash = self._rebalance(
-                    positions, signals, cash, total, today, trade_log
-                )
+            for sym in stops_hit:
+                del positions[sym]
 
-            # ── Mark portfolio at today's close ───────────────────────────────
+            # ── Step 2: sell positions where alpha dropped below threshold ──
             alpha_lookup = {r["symbol"]: r["alpha"] for _, r in signals.iterrows()}
-            close_px     = {r["symbol"]: r["close"] for _, r in signals.iterrows()}
+            to_sell = []
+            for sym in positions:
+                alpha = alpha_lookup.get(sym, 0)
+                if alpha < SELL_THRESHOLD:
+                    to_sell.append((sym, alpha))
 
-            holdings_value = sum(
-                pos["shares"] * close_px.get(sym, pos["entry"])
-                for sym, pos in positions.items()
-            )
-            total_value  = cash + holdings_value
+            for sym, alpha in to_sell:
+                if sym not in positions:
+                    continue
+                row     = signals[signals["symbol"] == sym]
+                if row.empty:
+                    continue
+                row     = row.iloc[0]
+                exit_px = row["open"]    # exit at today's open
+                proceeds= positions[sym]["shares"] * exit_px
+                tc      = proceeds * TC_BPS / 10_000
+                cash   += proceeds - tc
+                pnl_pct = (exit_px / positions[sym]["entry"] - 1) * 100
+                trade_log.append({
+                        "date": today, "action": "SELL (fade)", "symbol": sym,
+                        "price": exit_px, "shares": positions[sym]["shares"],
+                        "value": proceeds, "pnl_pct": pnl_pct,
+                        "reason": (
+                            f"Momentum faded. Alpha score dropped to {alpha:.3f}, "
+                            f"below the sell threshold of {SELL_THRESHOLD}. "
+                            f"The 5-day price move has been absorbed and the signal "
+                            f"is no longer strong enough to justify holding. "
+                            f"Exited at open with a {'gain' if pnl_pct >= 0 else 'loss'} "
+                            f"of {abs(pnl_pct):.2f}%."
+                        ),
+                    })
+                del positions[sym]
+
+            # ── Step 3: buy top alpha stocks ──────────────────────────────
+            held = set(positions.keys())
+            # Index ETFs excluded from direct purchase (used as benchmark context only)
+            # Oil ETFs ARE tradeable in the backtest
+            INDEX_ONLY = {"SPY", "QQQ", "IWM", "DIA", "VTI"}
+            candidates = signals[
+                (signals["alpha"] > BUY_THRESHOLD) &
+                (~signals["symbol"].isin(INDEX_ONLY)) &
+                (~signals["symbol"].isin(held))
+            ].head(MAX_POSITIONS - len(positions))
+
+            for _, row in candidates.iterrows():
+                if len(positions) >= MAX_POSITIONS:
+                    break
+                sym      = row["symbol"]
+                entry_px = row["open"]
+                if entry_px <= 0:
+                    continue
+
+                # Size: equal-weight remaining slots, capped at MAX_POSITION_PCT
+                slots_left  = MAX_POSITIONS - len(positions)
+                alloc_pct   = min(MAX_POSITION_PCT, 1.0 / max(slots_left, 1))
+                total_value = cash + sum(
+                    p["shares"] * (signals[signals["symbol"] == s].iloc[0]["close"]
+                                   if not signals[signals["symbol"] == s].empty else p["entry"])
+                    for s, p in positions.items()
+                )
+                alloc_value = alloc_pct * total_value
+                if alloc_value > cash:
+                    alloc_value = cash * 0.99   # use available cash
+
+                shares  = alloc_value / entry_px
+                tc      = alloc_value * TC_BPS / 10_000
+                cash   -= alloc_value + tc
+
+                stop_px = entry_px * (1 + STOP_LOSS_PCT)
+                positions[sym] = {
+                    "shares":     shares,
+                    "entry":      entry_px,
+                    "stop":       stop_px,
+                    "entry_date": today,
+                    "alpha_entry":row["alpha"],
+                }
+                trend_word = "above" if row['trend'] > 0 else "below"
+                mom_word   = "strong upward" if row['momentum'] > 0.5 else ("moderate upward" if row['momentum'] > 0 else "weak")
+                gap_word   = f"gap-up of {row['gap_raw']:+.1f}% at open" if row['gap_raw'] > 1 else (f"gap-down of {row['gap_raw']:+.1f}%" if row['gap_raw'] < -1 else "flat open")
+                rsi_word   = "in the momentum sweet spot" if 40 <= row['rsi_raw'] <= 65 else ("approaching oversold" if row['rsi_raw'] < 40 else "overbought")
+                trade_log.append({
+                    "date": today, "action": "BUY", "symbol": sym,
+                    "price": entry_px, "shares": shares,
+                    "value": alloc_value, "pnl_pct": None,
+                    "reason": (
+                        f"Alpha score {row['alpha']:.3f} exceeded the buy threshold of {BUY_THRESHOLD}. "
+                        f"5-day momentum is {mom_word} at {row['ret_5d']:+.1f}%, with a {gap_word}. "
+                        f"RSI of {row['rsi_raw']:.0f} is {rsi_word}, and the stock is trading "
+                        f"{trend_word} its 20-day moving average. "
+                        f"Stop set at ${stop_px:.2f} ({STOP_LOSS_PCT*100:.0f}% below entry)."
+                    ),
+                })
+
+            # ── Step 4: mark portfolio at today's close ────────────────────
+            holdings_value = 0.0
+            for sym, pos in positions.items():
+                row = signals[signals["symbol"] == sym]
+                close_px = row.iloc[0]["close"] if not row.empty else pos["entry"]
+                holdings_value += pos["shares"] * close_px
+
+            total_value = cash + holdings_value
             ret_vs_start = (total_value / STARTING_CAPITAL - 1) * 100
-            ret_vs_prev  = (
-                (total_value / daily_log[-1]["total_value"] - 1) * 100
-                if daily_log else 0.0
-            )
+            ret_vs_prev  = ((total_value / daily_log[-1]["total_value"] - 1) * 100
+                           if daily_log else 0.0)
 
+            # Top 5 alpha for the day
             top5 = signals.head(5)[["symbol","alpha","momentum","gap_raw","rsi_raw","ret_5d"]]
 
             daily_log.append({
-                "date":        today,
-                "date_str":    date_str,
-                "cash":        cash,
-                "holdings":    holdings_value,
-                "total_value": total_value,
-                "ret_pct":     ret_vs_start,
-                "daily_ret":   ret_vs_prev,
-                "positions":   list(positions.keys()),
-                "n_positions": len(positions),
-                "n_trades":    len([t for t in trade_log if t["date"] == today]),
-                "top5":        top5,
+                "date":         today,
+                "date_str":     date_str,
+                "cash":         cash,
+                "holdings":     holdings_value,
+                "total_value":  total_value,
+                "ret_pct":      ret_vs_start,
+                "daily_ret":    ret_vs_prev,
+                "positions":    list(positions.keys()),
+                "n_trades":     len([t for t in trade_log if t["date"] == today]),
+                "top5":         top5,
             })
 
-            # ── Print day summary ─────────────────────────────────────────────
+            # ── Print day summary ─────────────────────────────────────────
             direction = "▲" if ret_vs_prev >= 0 else "▼"
-            label     = "INIT" if day_idx == 0 else f"Day {day_idx+1:2d}"
-            print(f"\n  ┌─ {label} │ {date_str} {'─'*36}┐")
-            print(f"  │  Portfolio: ${total_value:>12,.0f}  "
-                  f"({ret_vs_start:+.2f}% vs start)  "
-                  f"{direction} {abs(ret_vs_prev):.2f}% today       │")
-            print(f"  │  Cash: ${cash:>12,.0f}   "
-                  f"Holdings: ${holdings_value:>12,.0f}  "
-                  f"Positions: {len(positions):2d}          │")
+            print(f"\n  ┌─ Day {day_idx+1:2d} │ {date_str} ─{'─'*36}┐")
+            print(f"  │  Portfolio: ${total_value:>12,.0f}  ({ret_vs_start:+.2f}% vs start)  "
+                  f"{direction} {abs(ret_vs_prev):.2f}% today  │")
+            print(f"  │  Cash: ${cash:>12,.0f}   Holdings: ${holdings_value:>12,.0f}          │")
+            held_str = ", ".join(f"{s}(α={alpha_lookup.get(s,0):.2f})" for s in positions) or "—"
+            print(f"  │  Held: {held_str:<55} │")
 
-            # Show held positions and their current alpha
-            held_alpha = sorted(
-                [(s, alpha_lookup.get(s, 0), close_px.get(s, positions[s]["entry"]))
-                 for s in positions],
-                key=lambda x: -x[1]
-            )
-            chunks = [held_alpha[i:i+4] for i in range(0, len(held_alpha), 4)]
-            for chunk in chunks:
-                line = "  │  " + "  ".join(
-                    f"{s:6s}α={a:+.2f}(${p:.0f})" for s, a, p in chunk
-                )
-                print(f"{line:<74}│")
+            print(f"  │  Top 5 α today:                                                    │")
+            for _, r in top5.iterrows():
+                print(f"  │    {r['symbol']:6s}  α={r['alpha']:+.3f}  "
+                      f"mom={r['momentum']:+.2f}  gap={r['gap_raw']:+.1f}%  "
+                      f"RSI={r['rsi_raw']:5.1f}  5d={r['ret_5d']:+.1f}%        │")
 
             day_trades = [t for t in trade_log if t["date"] == today]
             if day_trades:
-                print(f"  │  Trades:                                                           │")
+                print(f"  │  Trades today:                                                     │")
                 for t in day_trades:
-                    pnl_s = f" P&L {t['pnl_pct']:+.1f}%" if t["pnl_pct"] is not None else ""
-                    print(f"  │   {t['action']:12s} {t['symbol']:6s} "
+                    pnl_str = f"  P&L {t['pnl_pct']:+.1f}%" if t["pnl_pct"] is not None else ""
+                    print(f"  │    {t['action']:12s} {t['symbol']:6s}  "
                           f"${t['price']:8.2f}  {t['shares']:8.1f}sh  "
-                          f"${t['value']:>10,.0f}{pnl_s:<12}  │")
+                          f"${t['value']:>10,.0f}{pnl_str:<12}  │")
             print(f"  └{'─'*70}┘")
 
         return {"daily_log": daily_log, "trade_log": trade_log}
@@ -820,7 +561,7 @@ def compute_stats(daily_log: list) -> dict:
 
 def print_summary(stats: dict, daily_log: list, trade_log: list):
     print("\n" + "=" * 72)
-    print("  BACKTEST SUMMARY  (Init + Daily Rebalancing Strategy)")
+    print("  BACKTEST SUMMARY")
     print("=" * 72)
     print(f"  Total Return:          {stats['total_return']:>+8.2f}%")
     print(f"  Final Portfolio Value: ${stats['final_value']:>12,.0f}")
@@ -830,22 +571,13 @@ def print_summary(stats: dict, daily_log: list, trade_log: list):
     print(f"  Daily Std Dev:         {stats['daily_std']:>8.3f}%")
     print(f"  Annualised Sharpe:     {stats['annualised_sharpe']:>8.2f}")
     print(f"  Total Trades:          {len(trade_log)}")
-
-    buys_init  = [t for t in trade_log if t["action"] == "BUY (INIT)"]
-    buys_daily = [t for t in trade_log if t["action"] == "BUY"]
-    trims      = [t for t in trade_log if t["action"] == "TRIM"]
-    adds       = [t for t in trade_log if t["action"] == "ADD"]
-    sells_pnl  = [t for t in trade_log if t["pnl_pct"] is not None]
-
-    print(f"  Init positions:        {len(buys_init)}")
-    print(f"  Daily BUYs:            {len(buys_daily)}")
-    print(f"  Rebalance TRIMs/ADDs:  {len(trims)} / {len(adds)}")
-
+    buys     = [t for t in trade_log if t["action"] == "BUY"]
+    sells_pnl= [t for t in trade_log if t["pnl_pct"] is not None]
     if sells_pnl:
-        wins   = [t for t in sells_pnl if t["pnl_pct"] > 0]
-        losses = [t for t in sells_pnl if t["pnl_pct"] <= 0]
-        avg_w  = np.mean([t["pnl_pct"] for t in wins])   if wins   else 0
-        avg_l  = np.mean([t["pnl_pct"] for t in losses]) if losses else 0
+        wins  = [t for t in sells_pnl if t["pnl_pct"] > 0]
+        losses= [t for t in sells_pnl if t["pnl_pct"] <= 0]
+        avg_w = np.mean([t["pnl_pct"] for t in wins])   if wins   else 0
+        avg_l = np.mean([t["pnl_pct"] for t in losses]) if losses else 0
         print(f"  Trade Win Rate:        {len(wins)}/{len(sells_pnl)} "
               f"({len(wins)/len(sells_pnl)*100:.0f}%)")
         print(f"  Avg Win / Avg Loss:    {avg_w:+.2f}% / {avg_l:+.2f}%")
@@ -884,7 +616,7 @@ def plot_results(daily_log: list, trade_log: list, output_path: str = "backtest_
     fig, axes = plt.subplots(3, 1, figsize=(12, 10),
                              facecolor="#0D1117",
                              gridspec_kw={"height_ratios": [3, 1.5, 1.5]})
-    fig.suptitle("Alpha Score Strategy — 10-Day Backtest (Group B)",
+    fig.suptitle("Alpha Score Strategy — 10-Day Backtest",
                  color="#E6EDF3", fontsize=14, fontweight="bold", y=0.98)
 
     DARK  = "#0D1117"
@@ -956,21 +688,19 @@ def plot_results(daily_log: list, trade_log: list, output_path: str = "backtest_
     # ── Chart 3: Alpha score of held positions ────────────────────────────
     ax3 = axes[2]
     # Show number of positions held each day
-    n_pos = [d.get("n_positions", len(d["positions"])) for d in daily_log]
+    n_pos = [len(d["positions"]) for d in daily_log]
     ax3.fill_between(dates, n_pos, step="mid", color=BLUE, alpha=0.3)
     ax3.step(dates, n_pos, color=BLUE, linewidth=1.5, where="mid")
-    ax3.set_ylim(0, MAX_ACTIVE_POSITIONS + 1)
-    ax3.yaxis.set_major_locator(mticker.MultipleLocator(5))
+    ax3.set_ylim(0, MAX_POSITIONS + 0.5)
+    ax3.yaxis.set_major_locator(mticker.MultipleLocator(1))
     ax3.set_title("Positions Held", color=TEXT, fontsize=10, pad=8)
     ax3.set_ylabel("# Positions", color=GREY, fontsize=8)
     ax3.set_xlim(dates[0], dates[-1])
     ax3.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter("%b %d"))
 
-    # ── Reference lines ───────────────────────────────────────────────────
-    ax3.axhline(INIT_MAX_POSITIONS, color=GREEN, linewidth=0.8,
-                linestyle=":", alpha=0.5, label=f"Max ({INIT_MAX_POSITIONS})")
-    ax3.axhline(INIT_MIN_POSITIONS, color=GREY, linewidth=0.8,
-                linestyle=":", alpha=0.4, label=f"Min ({INIT_MIN_POSITIONS})")
+    # ── Alpha threshold lines ──────────────────────────────────────────────
+    ax3.axhline(MAX_POSITIONS, color=GREEN, linewidth=0.8,
+                linestyle=":", alpha=0.5, label=f"Max ({MAX_POSITIONS})")
 
     # Legend / caption
     from matplotlib.lines import Line2D
@@ -1000,10 +730,9 @@ def plot_results(daily_log: list, trade_log: list, output_path: str = "backtest_
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    print("\n  Alpha Score Backtester — MiF Deep Learning Competition (Group B)")
-    print(f"  Strategy: Initialization ({INIT_MIN_POSITIONS}–{INIT_MAX_POSITIONS} stocks) + "
-          f"Daily Rebalancing ({DAILY_TRADE_LIMIT} trades/day)")
-    print(f"  Universe: {len(UNIVERSE)} stocks  |  Backtest window: {BACKTEST_DAYS} trading days")
+    print("\n  Alpha Score Backtester — MiF Deep Learning Competition")
+    print(f"  Universe: {len(UNIVERSE)} liquid stocks")
+    print(f"  Lookback: {LOOKBACK_DAYS} days  |  Backtest window: {BACKTEST_DAYS} trading days")
 
     # ── Output folder: always save to user's Downloads folder ────────────────
     from pathlib import Path

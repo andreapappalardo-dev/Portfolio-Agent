@@ -12,8 +12,9 @@ Run with:
     python -m streamlit run app.py
 """
 
+import math
 import os
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -27,7 +28,7 @@ from agents import DataAgent, StrategyAgent, RiskAgent, ExecutionAgent
 from database import (
     init_db, migrate_db, reset_db, get_sim_state, get_positions,
     get_transactions, get_snapshots, save_snapshot, advance_date,
-    get_target_alerts,
+    get_target_alerts, get_trades_today,
 )
 from portfolio_manager import (
     fetch_prices, get_market_snapshot, get_portfolio_valuation,
@@ -132,15 +133,63 @@ def render_sidebar(sim):
                 f'{sim["current_date"]}</div>', unsafe_allow_html=True)
             days_left = max(0, 11 - sim.get("day_number", 0))
             st.caption(f"Day {sim.get('day_number',0)} · {days_left} days left")
-            if sim["current_date"] < date.today().isoformat():
-                st.warning("⚠️ Sim date behind today. Hit **Adv. Day** to sync.", icon="📅")
         else:
             st.warning("No simulation active")
         st.divider()
         st.markdown("### ⚙️ Controls")
-        if st.button("📅 Adv. Day", use_container_width=True, type="primary"):
+
+        # ── Advance Day ───────────────────────────────────────────────────────
+        if st.button("📅 Adv. Day", use_container_width=True, type="primary",
+                     help="Advance sim to the next trading day, then click Run Daily"):
             if sim:
                 advance_date(sim["current_date"]); st.rerun()
+
+        # ── Run Daily ─────────────────────────────────────────────────────────
+        trades_today = get_trades_today(sim["current_date"]) if sim else 0
+        trades_left  = max(0, 2 - trades_today)
+        run_label    = f"▶ Run Daily  ({trades_left} trade slot{'s' if trades_left != 1 else ''} left)"
+        run_disabled = trades_left == 0
+
+        if run_disabled:
+            st.button(run_label, use_container_width=True, disabled=True,
+                      help="Daily trade limit reached. Press Adv. Day first.")
+        else:
+            if st.button(run_label, use_container_width=True, type="secondary",
+                         help="Run the daily trading pipeline (fetch prices → Claude → execute)"):
+                import subprocess, sys as _sys, queue, threading
+                st.session_state["run_output"] = []
+                st.session_state["run_running"] = True
+
+                script = os.path.join(os.path.dirname(__file__), "run_daily.py")
+                proc   = subprocess.Popen(
+                    [_sys.executable, script],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1,
+                    cwd=os.path.dirname(os.path.abspath(__file__)),
+                )
+
+                output_box = st.empty()
+                lines = []
+                for line in proc.stdout:
+                    # Strip ANSI colour codes for clean display
+                    clean = __import__("re").sub(r"\x1b\[[0-9;]*m", "", line)
+                    lines.append(clean)
+                    output_box.code("".join(lines[-60:]), language=None)
+                proc.wait()
+                st.session_state["run_running"] = False
+                st.session_state["run_output"]  = lines
+
+                if proc.returncode == 0:
+                    st.success("✅ Daily run complete — refreshing…")
+                else:
+                    st.error(f"❌ run_daily.py exited with code {proc.returncode}")
+                st.rerun()
+
+        # Show last run output in an expander if available
+        if st.session_state.get("run_output"):
+            with st.expander("📋 Last run output", expanded=False):
+                st.code("".join(st.session_state["run_output"]), language=None)
+
         st.divider()
 
         # Start New Simulation — prominent card
@@ -315,7 +364,7 @@ def render_portfolio(sim, market_snap):
     cash        = sim["cash_balance"]
     cash_pct    = cash/total_value if total_value else 0
     txns        = get_transactions(50)
-    trades_today= sum(1 for t in txns if t["date"]==sim["current_date"])
+    trades_today= sum(1 for t in txns if t["date"]==sim["current_date"] and t.get("agent") != "Init")
     c1,c2,c3    = st.columns(3)
     with c1: st.metric("Cash Weight", format_pct(cash_pct, sign=False))
     with c2:
@@ -1223,9 +1272,10 @@ def main():
         st.metric("📅 Competition Day", f"Day {d}", delta=f"{max(0,11-d)} days remaining")
     st.divider()
 
-    all_tickers = list(dict.fromkeys(ASSETS+[BENCHMARK]))
+    position_tickers = [p["symbol"] for p in get_positions()]
+    all_tickers = list(dict.fromkeys(ASSETS + position_tickers + [BENCHMARK]))
     prices_df   = fetch_prices(all_tickers, lookback_days=60)
-    market_snap = get_market_snapshot(prices_df[[a for a in ASSETS if a in prices_df.columns]])
+    market_snap = get_market_snapshot(prices_df[[a for a in ASSETS + position_tickers if a in prices_df.columns]])
     if os.path.exists("screener_results.csv"):
         try: st.session_state["scores_df"] = pd.read_csv("screener_results.csv")
         except Exception: pass

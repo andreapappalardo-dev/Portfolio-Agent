@@ -162,9 +162,11 @@ def get_transactions(limit: int = 50) -> list[dict]:
 
 
 def get_trades_today(date_str: str) -> int:
+    """Count trades today, excluding initialization trades (agent='Init')."""
     conn = get_connection()
     count = conn.execute(
-        "SELECT COUNT(*) FROM transactions WHERE date=?", (date_str,)
+        "SELECT COUNT(*) FROM transactions WHERE date=? AND agent != 'Init'",
+        (date_str,)
     ).fetchone()[0]
     conn.close()
     return count
@@ -239,7 +241,7 @@ def record_trade(date_str: str, action: str, symbol: str,
 def update_total_value(new_total: float) -> None:
     conn = get_connection()
     conn.execute(
-        "UPDATE simulation SET total_value=?, day_number=day_number+1",
+        "UPDATE simulation SET total_value=?",
         (new_total,)
     )
     conn.commit()

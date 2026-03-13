@@ -52,7 +52,7 @@ import yfinance as yf
 
 from database import (
     init_db, get_sim_state, get_positions, get_trades_today,
-    record_trade, save_snapshot, advance_date, reset_db,
+    record_trade, save_snapshot, reset_db,
 )
 from portfolio_manager import (
     fetch_prices, get_market_snapshot, get_portfolio_valuation,
@@ -63,74 +63,10 @@ from portfolio_manager import (
 # ── Competition constants ─────────────────────────────────────────────────────
 COMPETITION_START = "2026-03-13"
 COMPETITION_END   = "2026-03-27"
-# ── Dashboard display assets (curated 26-stock watchlist shown in Streamlit) ──
 ASSETS = [
-    "NVDA", "AMD", "ARM", "AVGO", "MRVL",
-    "AAPL", "MSFT", "GOOGL", "META", "AMZN",
-    "JPM", "GS", "V",
-    "LLY", "UNH",
-    "XOM", "CVX",
-    "LMT", "RTX",
-    "PLTR", "NET",
-    "SPY", "QQQ", "GLD", "TLT",
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL",
+    "META", "JPM", "GLD", "TLT", "SPY",
 ]
-
-# ── Additional ETFs always included in the screener ──────────────────────────
-SCREENER_ETFS = [
-    "SPY", "QQQ", "IWM", "DIA",          # broad market
-    "XLK", "XLF", "XLE", "XLV", "XLI",  # sector SPDRs
-    "XLC", "XLY", "XLP", "XLU", "XLRE", # remaining SPDRs
-    "GLD", "SLV", "TLT", "IEF", "AGG",  # macro
-    "ARKK", "SOXX", "SMH",              # thematic
-]
-
-
-def get_screener_universe() -> list[str]:
-    """
-    Returns the full screener universe: S&P 500 + SCREENER_ETFS.
-    Tickers are hardcoded to avoid runtime HTTP dependencies.
-    """
-    SP500 = [
-        "MMM","AOS","ABT","ABBV","ACN","ADBE","AMD","AES","AFL","A","APD","ABNB","AKAM","ALB",
-        "ARE","ALGN","ALLE","LNT","ALL","GOOGL","GOOG","MO","AMZN","AMCR","AEE","AAL","AEP",
-        "AXP","AIG","AMT","AWK","AMP","AME","AMGN","APH","ADI","ANSS","AON","APA","APO","AAPL",
-        "AMAT","APTV","ACGL","ADM","ANET","AJG","AIZ","T","ATO","ADSK","ADP","AZO","AVB","AVY",
-        "AXON","BKR","BALL","BAC","BAX","BDX","BRK-B","BBY","TECH","BIIB","BLK","BX","BA","BCR",
-        "BMY","AVGO","BR","BRO","BF-B","BLDR","BG","CDNS","CZR","CPT","CPB","COF","CAH","KMX",
-        "CCL","CARR","CTLT","CAT","CBOE","CBRE","CDW","CE","COR","CNC","CNP","CF","CRL","SCHW",
-        "CHTR","CVX","CMG","CB","CHD","CI","CINF","CTAS","CSCO","C","CFG","CLX","CME","CMS",
-        "KO","CTSH","CL","CMCSA","CAG","COP","ED","STZ","CEG","COO","CPRT","GLW","CPAY","CTVA",
-        "CSGP","COST","CTRA","CRWD","CCI","CSX","CMI","CVS","DHR","DRI","DVA","DAY","DELL","DAL",
-        "DVN","DXCM","FANG","DLR","DFS","DG","DLTR","D","DPZ","DOV","DOW","DHI","DTE","DUK",
-        "DD","EMN","ETN","EBAY","ECL","EIX","EW","EA","ELV","EMR","ENPH","ETR","EOG","EPAM",
-        "EQT","EFX","EQIX","EQR","ESS","EL","ETSY","EG","EVRG","ES","EXC","EXPE","EXPD","EXR",
-        "XOM","FFIV","FDS","FICO","FAST","FRT","FDX","FIS","FITB","FSLR","FE","FI","FMC","F",
-        "FTNT","FTV","FOXA","FOX","BEN","FCX","GRMN","IT","GE","GEHC","GEV","GEN","GNRC","GD",
-        "GIS","GM","GPC","GILD","GPN","GL","GDDY","GS","HAL","HIG","HAS","HCA","DOC","HSIC",
-        "HSY","HES","HPE","HLT","HOLX","HD","HON","HRL","HST","HWM","HPQ","HUBB","HUM","HBAN",
-        "HII","IBM","IEX","IDXX","ITW","INCY","IR","PODD","INTC","ICE","IFF","IP","IPG","INTU",
-        "ISRG","IVZ","INVH","IQV","IRM","JBHT","JBL","JKHY","J","JNJ","JCI","JPM","JNPR","K",
-        "KVUE","KDP","KEY","KEYS","KMB","KIM","KMI","KKR","KLAC","KHC","KR","LHX","LH","LRCX",
-        "LW","LVS","LDOS","LEN","LLY","LIN","LYV","LKQ","LMT","L","LOW","LULU","LYB","MTB",
-        "MRO","MPC","MKTX","MAR","MMC","MLM","MAS","MA","MTCH","MKC","MCD","MCK","MDT","MRK",
-        "META","MET","MTD","MGM","MCHP","MU","MSFT","MAA","MRNA","MHK","MOH","TAP","MDLZ","MPWR",
-        "MNST","MCO","MS","MOS","MSI","MSCI","NDAQ","NTAP","NFLX","NEM","NWSA","NWS","NEE","NKE",
-        "NI","NDSN","NSC","NTRS","NOC","NCLH","NRG","NUE","NVDA","NVR","NXPI","ORLY","OXY","ODFL",
-        "OMC","ON","OKE","ORCL","OTIS","PCAR","PKG","PLTR","PH","PAYX","PAYC","PYPL","PNR","PEP",
-        "PFE","PCG","PM","PSX","PNW","PNC","POOL","PPG","PPL","PFG","PG","PGR","PRU","PLD","PEG",
-        "PTC","PSA","PHM","QRVO","PWR","QCOM","DGX","RL","RJF","RTX","O","REG","REGN","RF","RSG",
-        "RMD","RVTY","ROK","ROL","ROP","ROST","RCL","SPGI","CRM","SBAC","SLB","STX","SRE","NOW",
-        "SHW","SPG","SWKS","SJM","SW","SNA","SOLV","SO","LUV","SWK","SBUX","STT","STLD","STE",
-        "SYK","SMCI","SYF","SNPS","SYY","TMUS","TROW","TTWO","TPR","TRGP","TGT","TEL","TDY",
-        "TFX","TER","TSLA","TXN","TXT","TMO","TJX","TSCO","TT","TDG","TRV","TRMB","TFC","TYL",
-        "TSN","USB","UBER","UDR","ULTA","UNP","UAL","UPS","URI","UNH","UHS","VLO","VTR","VLTO",
-        "VRSN","VRSK","VZ","VRTX","VTRS","VICI","V","VST","WRB","GWW","WAB","WBA","WMT","DIS",
-        "WBD","WM","WAT","WEC","WFC","WELL","WST","WDC","WY","WMB","WTW","WYNN","XEL","XYL",
-        "YUM","ZBRA","ZBH","ZTS","ARM","MRVL","NET","DDOG","SNOW","PANW","COIN","MSTR","SHOP",
-    ]
-    full = list(dict.fromkeys(SP500 + SCREENER_ETFS))
-    info(f"S&P 500 + ETF universe loaded: {len(full)} tickers (hardcoded)")
-    return full
 BENCHMARK        = "SPY"
 MAX_POSITION_PCT = 0.40   # max 40% per position
 MAX_TRADES_DAY   = 2      # hard limit per project spec
@@ -145,7 +81,6 @@ BOLD  = "\033[1m"
 GREEN = "\033[92m"
 RED   = "\033[91m"
 CYAN  = "\033[96m"
-YELLOW= "\033[93m"
 DIM   = "\033[2m"
 RESET = "\033[0m"
 
@@ -211,191 +146,49 @@ def run_strategy_agent(
     data_summary: str,
 ) -> tuple[list[dict], str]:
     """
-    Calls Claude claude-sonnet-4-20250514 with the web_search tool.
-    1. Fetches prices for the full S&P 500 + ETF universe.
-    2. Scores every stock with the alpha formula.
-    3. Passes the top 12 candidates to Claude for final selection.
-    4. Writes screener_results.csv for the Streamlit dashboard.
-    """
-    from agents import compute_alpha_score, SECTOR_MAP, BUY_THRESHOLD, SELL_THRESHOLD
+    Calls Claude claude-sonnet-4-20250514 with the web_search tool to:
+      - research today's news for each asset
+      - apply momentum reasoning
+      - return structured BUY/SELL proposals + full reasoning text
 
+    Returns: (proposed_trades, reasoning_text)
+    """
     client       = anthropic.Anthropic(api_key=API_KEY)
     positions    = get_positions()
     cash         = sim["cash_balance"]
     total        = sim["total_value"]
     trades_used  = get_trades_today(sim["current_date"])
     remaining    = MAX_TRADES_DAY - trades_used
-    days_left    = max(1, 11 - sim["day_number"])
-    cash_pct     = cash / total * 100
+    max_pct      = int(MAX_POSITION_PCT * 100)
 
-    # ── Step 1: Full universe price fetch ────────────────────────────────────
-    universe = get_screener_universe()
-    info(f"Screener universe: {len(universe)} tickers — fetching prices (this takes ~30s)…")
-
-    # Fetch in batches of 100 to avoid yfinance timeouts
-    BATCH = 100
-    frames = []
-    for i in range(0, len(universe), BATCH):
-        batch = universe[i:i+BATCH]
-        try:
-            df_batch = fetch_prices(tuple(batch), lookback_days=30)
-            if not df_batch.empty:
-                frames.append(df_batch)
-        except Exception as e:
-            info(f"  Batch {i//BATCH+1} failed: {e}")
-
-    if not frames:
-        info("Price fetch failed for full universe — falling back to dashboard assets")
-        universe = ASSETS
-        prices_df_full = fetch_prices(tuple(ASSETS + [BENCHMARK]), lookback_days=30)
-    else:
-        prices_df_full = pd.concat(frames, axis=1)
-        # De-duplicate columns (same ticker in multiple batches)
-        prices_df_full = prices_df_full.loc[:, ~prices_df_full.columns.duplicated()]
-
-    ok(f"Prices fetched for {len(prices_df_full.columns)} tickers")
-
-    # ── Step 2: Score every ticker ────────────────────────────────────────────
-    screener_rows = []
-    enriched_full = {}
-
-    for ticker in prices_df_full.columns:
-        series = prices_df_full[ticker].dropna()
-        if len(series) < 21:          # need 21 days for alpha score
-            continue
-        closes  = series.tolist()
-        volumes = []                  # volume not in basic fetch; gap component will be 0
-        sigs    = compute_alpha_score(closes, volumes, today_open=0)
-
-        price   = closes[-1]
-        ret_20d = (closes[-1] / closes[-21] - 1) if len(closes) >= 21 else None
-
-        enriched_full[ticker] = {
-            "price":   price,
-            "ret_5d":  sigs.get("ret_5d"),
-            "ret_20d": ret_20d,
-            **sigs,
-        }
-
-        if ticker not in ("SPY", "QQQ", "IWM", "DIA", "GLD", "TLT", "IEF", "AGG"):
-            screener_rows.append({
-                "symbol":      ticker,
-                "price":       price,
-                "ret_5d":      (sigs.get("ret_5d") or 0) / 100,
-                "ret_20d":     ret_20d,
-                "vol_20d":     sigs.get("atr_pct"),
-                "score":       sigs.get("alpha", 0),
-                "alpha_label": sigs.get("alpha_label", "—"),
-            })
-
-    # ── Step 3: Write screener CSV for dashboard ──────────────────────────────
-    if screener_rows:
-        screener_df   = pd.DataFrame(screener_rows).sort_values("score", ascending=False)
-        screener_path = Path(__file__).parent / "screener_results.csv"
-        screener_df.to_csv(screener_path, index=False, encoding="utf-8-sig")
-        ok(f"Screener results saved → screener_results.csv ({len(screener_rows)} stocks scored)")
-
-    # ── Step 4: Select top 12 candidates for Claude ───────────────────────────
-    ranked = sorted(
-        [(t, m) for t, m in enriched_full.items()
-         if t not in ("SPY", "QQQ", "IWM", "DIA", "GLD", "TLT", "IEF", "AGG")],
-        key=lambda x: x[1].get("alpha", 0), reverse=True
-    )
-    top_candidates  = ranked[:12]
-    buy_signals     = [(t, m) for t, m in top_candidates if m.get("alpha", 0) >= BUY_THRESHOLD]
-    watch_list      = [(t, m) for t, m in top_candidates if 0.25 <= m.get("alpha", 0) < BUY_THRESHOLD]
-
-    alpha_lines = []
-    for t, m in top_candidates:
-        sec  = SECTOR_MAP.get(t, "?")
-        a    = m.get("alpha", 0)
-        r5   = m.get("ret_5d") or 0
-        rsi  = m.get("rsi14", "?")
-        atr  = m.get("atr_pct", "?")
-        lbl  = m.get("alpha_label", "—")
-        alpha_lines.append(
-            f"  {t:<6} [{sec:<8}]  α={a:+.3f} {lbl:<18}  "
-            f"5d={r5:+.1f}%  RSI={rsi}  ATR={atr}%  ${m.get('price', 0):,.2f}"
-        )
-    alpha_table = "\n".join(alpha_lines)
-    buy_txt  = ", ".join(f"{t}(α={m.get('alpha',0):+.3f})" for t, m in buy_signals) or "NONE"
-    watch_txt= ", ".join(f"{t}(α={m.get('alpha',0):+.3f})" for t, m in watch_list[:5]) or "NONE"
-
-    # ── Holdings summary ──────────────────────────────────────────────────────
-    positions    = get_positions()
-    held_symbols = [p["symbol"] for p in positions]
-    held_txt     = "\n".join(
-        f"  - {p['symbol']} [{SECTOR_MAP.get(p['symbol'],'?')}]: "
-        f"{p['shares']:.2f} sh @ ${p['avg_cost']:.2f}  "
-        f"α={enriched_full.get(p['symbol'],{}).get('alpha','?')}  "
-        f"target={'$'+str(p['target_price']) if p.get('target_price') else 'none'}  "
-        f"stop={'$'+str(p['stop_loss']) if p.get('stop_loss') else 'none'}"
+    held_txt = "\n".join(
+        f"  - {p['symbol']}: {p['shares']:.2f} shares @ avg ${p['avg_cost']:.2f}"
         for p in positions
-    ) or "  - (none — FULLY IN CASH, $0 deployed)"
+    ) or "  - (none — fully in cash)"
 
-    alpha_exits = [
-        p["symbol"] for p in positions
-        if enriched_full.get(p["symbol"], {}).get("alpha", 1.0) < SELL_THRESHOLD
-    ]
-    exit_block = ""
-    if alpha_exits:
-        exit_block = f"⚠️  ALPHA EXITS REQUIRED: {', '.join(alpha_exits)} (alpha < {SELL_THRESHOLD})\n"
+    # Compact market table (prices + 5d return only) to stay under rate limits
+    mkt_lines = []
+    for t, m in market_snap.items():
+        r5 = f"{m['ret_5d']*100:+.1f}%" if m['ret_5d'] else "n/a"
+        mkt_lines.append(f"{t}: ${m['price']:.0f} (5d {r5})")
+    mkt_compact = " | ".join(mkt_lines)
 
-    # ── Prompt ────────────────────────────────────────────────────────────────
-    prompt = f"""You are a quantitative AI portfolio manager in a 2-week paper trading competition.
-
-═══════════════════════════ SITUATION ═══════════════════════════
-Date:         {sim["current_date"]}  (Day {sim["day_number"]} of 11)
-Portfolio:    {format_dollar(total)}
-Cash:         {format_dollar(cash)} ({cash_pct:.1f}%)
-Positions:    {len(positions)} open
-Trades left today: {remaining} of {MAX_TRADES_DAY}
-
-Holdings:
-{held_txt}
-
-{exit_block}
-════════════════ TOP 12 FROM S&P 500 + ETF SCREENER ════════════════
-Screened {len(screener_rows)} stocks. Scoring formula:
-α = 0.40×momentum + 0.25×gap + 0.15×trend + 0.10×RSI + 0.10×volume
-BUY threshold: α > {BUY_THRESHOLD}  |  SELL threshold: α < {SELL_THRESHOLD}
-
-{alpha_table}
-
-🚀 BUY signals (α ≥ {BUY_THRESHOLD}): {buy_txt}
-📈 Watch list (α 0.25–{BUY_THRESHOLD}):  {watch_txt}
-
-═══════════════════════════ DECISION RULES ════════════════════════════════
-1. SELL first: exit any position where alpha < {SELL_THRESHOLD} or stop hit
-2. NEW ENTRIES: only consider stocks where alpha > {BUY_THRESHOLD}
-   • NEVER buy RSI > 70 (overbought)
-   • Use web search to confirm top candidates have real catalysts
-   • ATR > 3% → cap position at 25%; otherwise up to 40% per position
-   • Target = entry × 1.10 to 1.15  |  Stop = entry × 0.93 to 0.95
-3. If no stock clears the alpha threshold, recommend holding — do not force trades.
-
-STEP 1: Search "[TOP_TICKER] stock news {sim["current_date"]}" for the top 2 alpha candidates.
-STEP 2: Output JSON with your decisions (empty list [] if no trades are warranted).
-
-```json
-[
-  {{
-    "action": "BUY",
-    "symbol": "TICKER",
-    "target_pct": 0.35,
-    "target_price": 0.0,
-    "stop_loss": 0.0,
-    "holding_days": 5,
-    "framework": "momentum",
-    "reason": "2-3 sentence explanation with alpha breakdown + news catalyst"
-  }}
-]
-```
-End with the JSON block."""
+    prompt = (
+        f"You are an AI portfolio manager. Date: {sim['current_date']}. "
+        f"Portfolio: {format_dollar(total)}, Cash: {format_dollar(cash)}. "
+        f"Holdings: {held_txt}. "
+        f"Market snapshot: {mkt_compact}. "
+        f"Competition ends {COMPETITION_END} (~{remaining} trade(s) left today, max {max_pct}% per position). "
+        "Use web search to find today's top market news, then propose up to 2 trades. "
+        "Be bold — maximise returns. Reply ONLY with reasoning + this JSON at the end:\n"
+        "```json\n"
+        "[{\"action\":\"BUY\",\"symbol\":\"X\",\"target_pct\":0.25,\"reason\":\"..\"}]\n"
+        "```"
+    )
 
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=2500,
+        max_tokens=800,
         tools=[{"type": "web_search_20250305", "name": "web_search"}],
         messages=[{"role": "user", "content": prompt}],
     )
@@ -506,9 +299,6 @@ def run_execution_agent(
             tc_bps=TC_BPS,
             reason=t.get("reason", "Agent decision"),
             agent="Execution",
-            target_price=t.get("target_price") if action == "BUY" else None,
-            stop_loss=t.get("stop_loss")        if action == "BUY" else None,
-            holding_days=t.get("holding_days")  if action == "BUY" else None,
         )
         executed.append({
             "action": action,
@@ -521,198 +311,6 @@ def run_execution_agent(
 
     return executed
 
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# INITIALIZATION — Day 1 portfolio construction (10–20 stocks)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def run_initialization(sim: dict) -> None:
-    """
-    Runs on Day 1 when the portfolio is empty.
-    Screens the full S&P 500 + ETF universe, picks the top 10-20 stocks
-    by alpha score, allocates capital equally across them, executes all
-    entry trades (bypasses the 2-trade/day limit for this one-time setup),
-    and writes prices.csv with the chosen holdings.
-    """
-    from agents import compute_alpha_score, SECTOR_MAP
-
-    N_MIN, N_MAX   = 10, 20      # target portfolio size
-    DEPLOY_FRAC    = 0.90        # deploy 90% of cash; keep 10% buffer
-    MAX_POS        = 0.40        # hard cap per position
-
-    section("INITIALIZATION — Building Day 1 Portfolio (10-20 stocks)")
-    info("Running full screener to select initial holdings...")
-
-    # Fetch prices for full universe
-    universe = get_screener_universe()
-    BATCH    = 100
-    frames   = []
-    for i in range(0, len(universe), BATCH):
-        batch = universe[i:i+BATCH]
-        try:
-            df_b = fetch_prices(tuple(batch), lookback_days=30)
-            if not df_b.empty:
-                frames.append(df_b)
-        except Exception as e:
-            info(f"  Batch {i//BATCH+1} failed: {e}")
-
-    if not frames:
-        err("Could not fetch prices for initialization -- aborting init")
-        return
-
-    prices_df_full = pd.concat(frames, axis=1)
-    prices_df_full = prices_df_full.loc[:, ~prices_df_full.columns.duplicated()]
-    ok(f"Prices fetched: {len(prices_df_full.columns)} tickers")
-
-    # Score every ticker
-    scored = []
-    for ticker in prices_df_full.columns:
-        series = prices_df_full[ticker].dropna()
-        if len(series) < 21:
-            continue
-        closes = series.tolist()
-        sigs   = compute_alpha_score(closes, [], today_open=0)
-        price  = closes[-1]
-        alpha  = sigs.get("alpha", 0)
-
-        # Exclude broad index ETFs from direct equity holdings
-        if ticker in ("SPY", "QQQ", "IWM", "DIA", "GLD", "TLT", "IEF", "AGG"):
-            continue
-
-        scored.append({
-            "symbol":  ticker,
-            "price":   price,
-            "alpha":   alpha,
-            "ret_5d":  sigs.get("ret_5d", 0),
-            "rsi":     sigs.get("rsi14", 50),
-            "sector":  SECTOR_MAP.get(ticker, "Other"),
-        })
-
-    if not scored:
-        err("No stocks scored -- initialization aborted")
-        return
-
-    # Sort by alpha, filter negatives, clamp to N_MAX
-    scored.sort(key=lambda x: x["alpha"], reverse=True)
-    scored = [s for s in scored if s["alpha"] > 0]
-    n_pick = min(N_MAX, max(N_MIN, len(scored)))
-    picks  = scored[:n_pick]
-
-    ok(f"Selected {len(picks)} stocks for initial portfolio")
-    for p in picks[:5]:
-        print(f"    {p['symbol']:<6}  alpha={p['alpha']:+.3f}  RSI={p['rsi']}  ${p['price']:.2f}")
-    if len(picks) > 5:
-        info(f"  ... and {len(picks)-5} more")
-
-    # Allocate capital — rank-based weighting
-    # Stock ranked #1 gets weight N, #2 gets N-1, ..., #N gets 1.
-    # Normalized so all weights sum to DEPLOY_FRAC (90%), then capped at MAX_POS (40%).
-    # After capping, surplus is redistributed proportionally to uncapped stocks.
-    sim_now   = get_sim_state()
-    cash      = sim_now["cash_balance"]
-    total     = sim_now["total_value"]
-    n         = len(picks)
-
-    # Raw rank scores: best stock = n points, worst = 1 point
-    rank_scores = [n - i for i in range(n)]           # [n, n-1, ..., 1]
-    rank_sum    = sum(rank_scores)                     # n*(n+1)/2
-    raw_weights = [s / rank_sum * DEPLOY_FRAC for s in rank_scores]
-
-    # Iteratively cap at MAX_POS and redistribute surplus
-    weights = raw_weights[:]
-    for _ in range(10):
-        surplus    = sum(max(0, w - MAX_POS) for w in weights)
-        weights    = [min(w, MAX_POS) for w in weights]
-        uncapped   = [i for i, w in enumerate(weights) if w < MAX_POS]
-        if surplus < 1e-6 or not uncapped:
-            break
-        uncapped_sum = sum(weights[i] for i in uncapped)
-        for i in uncapped:
-            weights[i] += surplus * (weights[i] / uncapped_sum) if uncapped_sum else surplus / len(uncapped)
-
-    # Log the weight plan
-    info("Rank-based weight allocation:")
-    for i, (pick, w) in enumerate(zip(picks, weights)):
-        print(f"    #{i+1:<2} {pick['symbol']:<6}  alpha={pick['alpha']:+.3f}  weight={w*100:.1f}%")
-
-    executed_init = []
-    prices_rows   = []
-
-    for pick, target_pct in zip(picks, weights):
-        sym         = pick["symbol"]
-        price       = pick["price"]
-
-        # Fetch a fresh live price
-        try:
-            raw = yf.download(sym, period="2d", progress=False, auto_adjust=True)
-            if not raw.empty:
-                price = float(raw["Close"].iloc[-1])
-        except Exception:
-            pass
-
-        required = target_pct * total
-        if required > cash:
-            info(f"  Skipping {sym} -- insufficient cash")
-            continue
-
-        shares       = round(required / price, 4)
-        target_price = round(price * 1.12, 2)
-        stop_loss    = round(price * 0.94, 2)
-
-        record_trade(
-            date_str     = sim_now["current_date"],
-            action       = "BUY",
-            symbol       = sym,
-            shares       = shares,
-            price        = price,
-            tc_bps       = TC_BPS,
-            reason       = (
-                f"Initialization: Day 1 portfolio construction. "
-                f"Alpha={pick['alpha']:+.3f}, RSI={pick['rsi']}, "
-                f"sector={pick['sector']}. Equal-weight entry across "
-                f"{n} top-alpha stocks. Target +12%, stop -6%."
-            ),
-            agent        = "Init",
-            target_price = target_price,
-            stop_loss    = stop_loss,
-            holding_days = 11,
-        )
-
-        sim_now = get_sim_state()
-        cash    = sim_now["cash_balance"]
-
-        executed_init.append({
-            "symbol": sym, "shares": shares, "price": price,
-            "value": shares * price, "alpha": pick["alpha"],
-            "weight_pct": target_pct * 100,
-        })
-        prices_rows.append({
-            "symbol":       sym,
-            "price":        round(price, 4),
-            "alpha":        round(pick["alpha"], 4),
-            "weight_pct":   round(target_pct * 100, 2),
-            "shares":       shares,
-            "value":        round(shares * price, 2),
-            "target_price": target_price,
-            "stop_loss":    stop_loss,
-            "sector":       pick["sector"],
-            "date":         sim_now["current_date"],
-        })
-
-    if executed_init:
-        print(f"\n  {'Symbol':<8} {'Shares':>8} {'Price':>9} {'Value':>12} {'Alpha':>8} {'Wt%':>6}")
-        print("  " + "-" * 58)
-        for e in executed_init:
-            print(f"  {e['symbol']:<8} {e['shares']:>8.2f} {e['price']:>9.2f} "
-                  f"{format_dollar(e['value']):>12} {e['alpha']:>+8.3f} {e['weight_pct']:>5.1f}%")
-        ok(f"Initialized {len(executed_init)} positions")
-
-        prices_csv_path = Path(__file__).parent / "prices.csv"
-        pd.DataFrame(prices_rows).to_csv(prices_csv_path, index=False, encoding="utf-8-sig")
-        ok(f"prices.csv written -> {prices_csv_path} ({len(prices_rows)} stocks)")
-    else:
-        info("No positions executed during initialization")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main daily loop
@@ -730,7 +328,6 @@ def main() -> None:
     init_db()
     sim = get_sim_state()
 
-    is_fresh = sim is None
     if sim is None:
         info("No simulation found — initialising fresh database...")
         reset_db(STARTING_CAPITAL, COMPETITION_START)
@@ -739,30 +336,47 @@ def main() -> None:
     else:
         ok(f"Loaded existing simulation · Day {sim['day_number']} · {sim['current_date']}")
 
-    # ── 1b. Initialization phase (Day 1 only) ─────────────────────────────────
-    existing_positions = get_positions()
-    if is_fresh or (sim.get("day_number", 1) == 1 and not existing_positions):
-        info("Day 1 detected with no positions — running initialization phase...")
-        run_initialization(sim)
-        sim = get_sim_state()
-        ok("Initialization complete — portfolio built")
-
-    # ── 2. Advance date ───────────────────────────────────────────────────────
-    section("Step 2 — Advancing Date")
-    today_real = datetime.today().strftime("%Y-%m-%d")
-    if sim["current_date"] < today_real:
-        new_date = advance_date(sim["current_date"])
-        sim      = get_sim_state()
-        ok(f"Advanced to {new_date}  (Day {sim['day_number']})")
-    else:
-        ok(f"Already on {sim['current_date']} — no advance needed")
-
-    days_left = max(0, 11 - sim["day_number"])
+    # ── 2. Date check — NO auto-advance ──────────────────────────────────────
+    # Date is advanced manually via the "Adv. Day" button in the dashboard.
+    # run_daily.py always operates on the current sim date, whatever it is.
+    section("Step 2 — Date Check")
+    ok(f"Sim date: {sim['current_date']}  (Day {sim['day_number']})")
+    days_left = max(0, (
+        pd.Timestamp(COMPETITION_END) - pd.Timestamp(sim["current_date"])
+    ).days)
     info(f"Days remaining in competition: {days_left}")
+
+    # ── Idempotency guard — skip if daily trade limit already exhausted ────────
+    trades_already = get_trades_today(sim["current_date"])
+    if trades_already >= MAX_TRADES_DAY:
+        print(f"\n  {BOLD}⚠  Daily limit reached: {trades_already}/{MAX_TRADES_DAY} trades "
+              f"already executed on {sim['current_date']}.{RESET}")
+        print(f"  {DIM}Press 'Adv. Day' in the dashboard then re-run to trade on the next day.{RESET}\n")
+        # Show current portfolio and exit cleanly
+        section("Current Portfolio (daily limit reached)")
+        all_tickers = list(dict.fromkeys(ASSETS + [BENCHMARK]))
+        prices_df   = fetch_prices(tuple(all_tickers), lookback_days=60)
+        asset_cols  = [a for a in ASSETS if a in prices_df.columns]
+        market_snap = get_market_snapshot(prices_df[asset_cols])
+        prices_dict = {t: m["price"] for t, m in market_snap.items() if m["price"]}
+        total_val, holdings_val, cash_val = get_portfolio_valuation(prices_dict)
+        delta_pct = (total_val - STARTING_CAPITAL) / STARTING_CAPITAL
+        color = GREEN if delta_pct >= 0 else RED
+        print(f"  {'Total Portfolio Value':<28} {format_dollar(total_val):>16}")
+        print(f"  {'Cash':<28} {format_dollar(cash_val):>16}")
+        print(f"  {'Holdings (Market Value)':<28} {format_dollar(holdings_val):>16}")
+        print(f"  {'Return vs $1M Start':<28} {format_pct(delta_pct):>16}")
+        print(f"  {'Open Positions':<28} {len(get_positions()):>16}")
+        print(f"\n  {BOLD}Portfolio: {color}{format_dollar(total_val)}{RESET}  "
+              f"({color}{format_pct(delta_pct)}{RESET} vs start)\n")
+        print(f"  {DIM}Dashboard: python -m streamlit run app.py{RESET}")
+        print(f"{BOLD}{'='*64}{RESET}\n")
+        return
 
     # ── 3. Fetch market data ──────────────────────────────────────────────────
     section("Step 3 — Data Agent · Fetching Live Prices")
-    info("Loading S&P 500 + ETF screener universe…")
+    info("Downloading prices via yfinance...")
+
     all_tickers = list(dict.fromkeys(ASSETS + [BENCHMARK]))
     prices_df   = fetch_prices(tuple(all_tickers), lookback_days=60)
 
@@ -776,6 +390,33 @@ def main() -> None:
     data_summary = run_data_agent(market_snap, sim)
     print()
     print(data_summary)
+
+    # ── 3b. Extend market_snap with screener prices ───────────────────────────
+    # The Strategy Agent picks from 525 tickers; the Risk Agent needs a price
+    # for any ticker Claude proposes, not just the 25 in ASSETS.
+    try:
+        scr = pd.read_csv("screener_results.csv")
+        scr.columns = [c.lstrip("\ufeff").strip() for c in scr.columns]
+        added = 0
+        for _, row in scr.iterrows():
+            sym = str(row.get("ticker", "")).strip()
+            px  = pd.to_numeric(row.get("price"), errors="coerce")
+            if sym and pd.notna(px) and sym not in market_snap:
+                market_snap[sym] = {
+                    "price":   float(px),
+                    "alpha":   float(pd.to_numeric(row.get("alpha",   0), errors="coerce") or 0),
+                    "atr_pct": float(pd.to_numeric(row.get("atr_pct", 0), errors="coerce") or 0) or None,
+                    "ret_5d":  float(pd.to_numeric(row.get("ret_5d",  0), errors="coerce") or 0),
+                    "rsi14":   float(pd.to_numeric(row.get("rsi14",   0), errors="coerce") or 0) or None,
+                    "ret_1d": None, "ret_20d": None, "vol_20d": None,
+                }
+                added += 1
+        if added:
+            info(f"market_snap extended: +{added} screener tickers → {len(market_snap)} total")
+    except FileNotFoundError:
+        info("screener_results.csv not found — market_snap limited to ASSETS watchlist")
+    except Exception as e:
+        info(f"Could not extend market_snap from screener: {e}")
 
     # ── 4. Strategy Agent (Claude + web search) ───────────────────────────────
     section("Step 4 — Strategy Agent · Claude + Web Search")
@@ -799,76 +440,6 @@ def main() -> None:
                   f"→ {t.get('target_pct', 0)*100:.0f}%   {t.get('reason', '')[:70]}")
     else:
         info("No trades proposed — agent recommends holding current positions")
-
-    # ── Forced-trade fallback ─────────────────────────────────────────────────
-    # If Claude returned no BUY trades but cash is above 20%, we force-buy the
-    # top alpha stock. In a short competition, idle cash is a guaranteed loss.
-    # This only triggers when:
-    #   1. No BUY was proposed by Claude
-    #   2. Cash > 20% of portfolio
-    #   3. At least one trade slot is still available today
-    #   4. There is at least one scoreable stock in the screener results
-    trades_used_now = get_trades_today(sim["current_date"])
-    cash_pct_now    = sim["cash_balance"] / sim["total_value"] if sim["total_value"] else 0
-    has_buy         = any(t["action"] == "BUY" for t in proposed)
-
-    if not has_buy and cash_pct_now > 0.20 and trades_used_now < MAX_TRADES_DAY:
-        screener_path = Path(__file__).parent / "screener_results.csv"
-        fallback_trade = None
-
-        if screener_path.exists():
-            try:
-                sc_df = pd.read_csv(screener_path)
-                # Filter out already-held symbols and ETFs
-                held_syms = [p["symbol"] for p in get_positions()]
-                exclude   = set(held_syms + ["SPY","QQQ","IWM","DIA","GLD","TLT","IEF","AGG"])
-                sc_df     = sc_df[~sc_df["symbol"].isin(exclude)]
-                sc_df     = sc_df.sort_values("score", ascending=False)
-
-                if not sc_df.empty:
-                    top = sc_df.iloc[0]
-                    sym   = top["symbol"]
-                    score = float(top["score"])
-                    price = market_snap.get(sym, {}).get("price")
-
-                    # Only force-buy if price is available and score isn't deeply negative
-                    if price and score > -0.10:
-                        # Size: deploy up to 35% per slot, respect cash available
-                        slots_left  = MAX_TRADES_DAY - trades_used_now
-                        # If 2 slots free, split remaining cash ~50/50 across both
-                        # If 1 slot free, deploy all remaining above 10% buffer
-                        if slots_left >= 2:
-                            target_pct = min(0.35, (cash_pct_now - 0.10) / slots_left)
-                        else:
-                            target_pct = min(0.35, cash_pct_now - 0.10)
-                        target_pct = round(max(0.10, target_pct), 2)
-
-                        fallback_trade = {
-                            "action":       "BUY",
-                            "symbol":       sym,
-                            "target_pct":   target_pct,
-                            "target_price": round(price * 1.10, 2),
-                            "stop_loss":    round(price * 0.94, 2),
-                            "holding_days": 5,
-                            "framework":    "forced_momentum",
-                            "reason":       (
-                                f"Forced-trade fallback: Claude returned no BUY despite "
-                                f"{cash_pct_now*100:.0f}% cash and {max(0,11-sim['day_number'])} "
-                                f"days remaining. Top alpha stock from screener: "
-                                f"{sym} (α={score:+.3f}). "
-                                f"Target +10%, stop -6%."
-                            ),
-                        }
-            except Exception as e:
-                info(f"Forced-trade fallback failed to read screener: {e}")
-
-        if fallback_trade:
-            proposed.append(fallback_trade)
-            print(f"\n  {YELLOW}⚡ FORCED TRADE FALLBACK triggered — Claude held cash above 20%{RESET}")
-            print(f"    {GREEN}BUY {RESET} {fallback_trade['symbol']:<6}  "
-                  f"→ {fallback_trade['target_pct']*100:.0f}%   {fallback_trade['reason'][:80]}")
-        else:
-            info("Forced-trade fallback: no eligible stock found — holding cash")
 
     # ── 5. Risk Agent ──────────────────────────────────────────────────────────
     section("Step 5 — Risk Agent · Validating Proposals")
