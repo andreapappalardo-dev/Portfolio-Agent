@@ -414,12 +414,17 @@ def main() -> None:
                 price = float(col.iloc[-1])
                 if price < 2:
                     continue
-                sigs = compute_alpha_score(col.tolist(), [], 0)
+                prices_list = col.tolist()
+                sigs = compute_alpha_score(prices_list, [], 0)
+                ret_1d  = (prices_list[-1] / prices_list[-2]  - 1) if len(prices_list) >= 2  else 0
+                ret_20d = (prices_list[-1] / prices_list[-21] - 1) if len(prices_list) >= 21 else 0
                 scr_rows.append({
                     "ticker":  t,
                     "price":   round(price, 2),
                     "alpha":   round(sigs.get("alpha", 0), 4),
                     "ret_5d":  round(sigs.get("ret_5d") or 0, 2),
+                    "ret_1d":  round(ret_1d * 100, 2),
+                    "ret_20d": round(ret_20d * 100, 2),
                     "rsi14":   round(sigs.get("rsi14") or 0, 1),
                     "atr_pct": round(sigs.get("atr_pct") or 0, 2),
                 })
