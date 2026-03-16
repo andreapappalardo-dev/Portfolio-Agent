@@ -252,8 +252,7 @@ def run_risk_agent(
 
         if price is None:
             rejected.append((t, "No live price available")); continue
-        if len(approved) >= budget:
-            rejected.append((t, f"Daily trade limit ({MAX_TRADES_DAY}) reached")); continue
+
         if target_pct > MAX_POSITION_PCT:
             rejected.append((t, f"Target {target_pct*100:.0f}% > max {MAX_POSITION_PCT*100:.0f}%")); continue
         if action == "BUY":
@@ -377,9 +376,6 @@ def main() -> None:
 
     # ── Idempotency guard — skip if daily trade limit already exhausted ────────
     trades_already = get_trades_today(sim["current_date"])
-    if trades_already >= MAX_TRADES_DAY:
-        info(f"Daily limit of {MAX_TRADES_DAY} trades already reached for {sim['current_date']} — skipping.")
-        return
 
     # ── 3. Fetch market data ──────────────────────────────────────────────────
     section("Step 3 — Data Agent · Fetching Live Prices")
