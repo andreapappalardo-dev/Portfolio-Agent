@@ -68,7 +68,7 @@ ASSETS = [
     "META", "JPM", "GLD", "TLT", "SPY",
 ]
 BENCHMARK        = "SPY"
-MAX_POSITION_PCT = 0.40   # max 40% per position
+MAX_POSITION_PCT = 0.15   # max 15% per position
 MAX_TRADES_DAY   = 2      # hard limit per project spec
 TC_BPS           = 10.0   # transaction cost in basis points
 
@@ -188,7 +188,7 @@ def run_strategy_agent(
 
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=800,
+        max_tokens=2500,
         tools=[{"type": "web_search_20250305", "name": "web_search"}],
         messages=[{"role": "user", "content": prompt}],
     )
