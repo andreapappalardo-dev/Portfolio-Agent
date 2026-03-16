@@ -258,10 +258,19 @@ def run_risk_agent(
         if action == "BUY":
             # Check combined weight (existing + new) doesn't exceed cap
             existing_pos = next((p for p in get_positions() if p["symbol"] == symbol), None)
-            existing_pct = (existing_pos["shares"] * price / total) if existing_pos else 0.0
-            combined_pct = existing_pct + target_pct
-            if combined_pct > MAX_POSITION_PCT + 0.001:
-                rejected.append((t, f"Combined weight {combined_pct*100:.1f}% > cap {MAX_POSITION_PCT*100:.0f}%")); continue
+            if existing_pos:
+                # Use live price if available, else avg_cost
+                live_px = market_snap.get(symbol, {}).get("price") or existing_pos["avg_cost"]
+                existing_pct = existing_pos["shares"] * live_px / total
+                if existing_pct >= MAX_POSITION_PCT - 0.001:
+                    rejected.append((t, f"Already at cap: {existing_pct*100:.1f}% ≥ {MAX_POSITION_PCT*100:.0f}%")); continue
+                combined_pct = existing_pct + target_pct
+                if combined_pct > MAX_POSITION_PCT + 0.001:
+                    # Trim target_pct to fit under cap
+                    target_pct = max(0.0, MAX_POSITION_PCT - existing_pct)
+                    t["target_pct"] = target_pct
+                    if target_pct < 0.01:
+                        rejected.append((t, f"No room to add: existing {existing_pct*100:.1f}% leaves < 1%")); continue
             required = target_pct * total
             if required > cash + 0.01:
                 rejected.append((t, f"Insufficient cash: need {format_dollar(required)}, "
