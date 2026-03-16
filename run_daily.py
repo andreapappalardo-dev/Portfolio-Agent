@@ -69,7 +69,7 @@ ASSETS = [
 ]
 BENCHMARK        = "SPY"
 MAX_POSITION_PCT = 0.15   # max 15% per position
-MAX_TRADES_DAY   = 2      # hard limit per project spec
+MAX_TRADES_DAY   = 5      # raised to allow more daily trades
 TC_BPS           = 10.0   # transaction cost in basis points
 
 
@@ -378,28 +378,7 @@ def main() -> None:
     # ── Idempotency guard — skip if daily trade limit already exhausted ────────
     trades_already = get_trades_today(sim["current_date"])
     if trades_already >= MAX_TRADES_DAY:
-        print(f"\n  {BOLD}⚠  Daily limit reached: {trades_already}/{MAX_TRADES_DAY} trades "
-              f"already executed on {sim['current_date']}.{RESET}")
-        print(f"  {DIM}Press 'Adv. Day' in the dashboard then re-run to trade on the next day.{RESET}\n")
-        # Show current portfolio and exit cleanly
-        section("Current Portfolio (daily limit reached)")
-        all_tickers = list(dict.fromkeys(ASSETS + [BENCHMARK]))
-        prices_df   = fetch_prices(tuple(all_tickers), lookback_days=60)
-        asset_cols  = [a for a in ASSETS if a in prices_df.columns]
-        market_snap = get_market_snapshot(prices_df[asset_cols])
-        prices_dict = {t: m["price"] for t, m in market_snap.items() if m["price"]}
-        total_val, holdings_val, cash_val = get_portfolio_valuation(prices_dict)
-        delta_pct = (total_val - STARTING_CAPITAL) / STARTING_CAPITAL
-        color = GREEN if delta_pct >= 0 else RED
-        print(f"  {'Total Portfolio Value':<28} {format_dollar(total_val):>16}")
-        print(f"  {'Cash':<28} {format_dollar(cash_val):>16}")
-        print(f"  {'Holdings (Market Value)':<28} {format_dollar(holdings_val):>16}")
-        print(f"  {'Return vs $1M Start':<28} {format_pct(delta_pct):>16}")
-        print(f"  {'Open Positions':<28} {len(get_positions()):>16}")
-        print(f"\n  {BOLD}Portfolio: {color}{format_dollar(total_val)}{RESET}  "
-              f"({color}{format_pct(delta_pct)}{RESET} vs start)\n")
-        print(f"  {DIM}Dashboard: python -m streamlit run app.py{RESET}")
-        print(f"{BOLD}{'='*64}{RESET}\n")
+        info(f"Daily limit of {MAX_TRADES_DAY} trades already reached for {sim['current_date']} — skipping.")
         return
 
     # ── 3. Fetch market data ──────────────────────────────────────────────────
