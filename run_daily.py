@@ -264,10 +264,11 @@ def run_risk_agent(
             cash -= required  # update running cash so subsequent BUYs see correct balance
         elif action == "SELL":
             # Credit cash from this sell so subsequent BUYs can use it
-            position = next((p for p in __import__('database').get_positions()
-                             if p["symbol"] == symbol), None)
+            position = next((p for p in get_positions() if p["symbol"] == symbol), None)
             if position:
-                cash += position["shares"] * price
+                sell_value = position["shares"] * price
+                tc_cost    = sell_value * TC_BPS / 10_000
+                cash += sell_value - tc_cost
 
         approved.append(t)
 
@@ -289,16 +290,30 @@ def run_execution_agent(
     total    = sim["total_value"]
     executed = []
 
+    positions = get_positions()
+    pos_map   = {p["symbol"]: p for p in positions}
+
     for t in approved:
         symbol     = t["symbol"]
         target_pct = t.get("target_pct", 0.0)
         action     = t["action"]
-        price      = market_snap.get(symbol, {}).get("price")
+        price = market_snap.get(symbol, {}).get("price")
 
-        if not price:
-            continue
+        if action == "SELL":
+            # Sell ALL shares of this position
+            pos = pos_map.get(symbol)
+            if not pos:
+                continue
+            # Fall back to avg_cost if live price unavailable
+            if not price:
+                price = pos["avg_cost"]
+            shares = pos["shares"]
+        else:
+            # BUY: size based on target_pct of total portfolio
+            if not price:
+                continue
+            shares = round(target_pct * total / price, 4)
 
-        shares = round(target_pct * total / price, 4)
         if shares <= 0:
             continue
 
@@ -311,6 +326,8 @@ def run_execution_agent(
             tc_bps=TC_BPS,
             reason=t.get("reason", "Agent decision"),
             agent="Execution",
+            target_price=t.get("target_price"),
+            stop_loss=t.get("stop_loss"),
         )
         executed.append({
             "action": action,
