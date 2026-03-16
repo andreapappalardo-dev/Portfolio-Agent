@@ -78,9 +78,17 @@ def get_market_snapshot(prices_df: pd.DataFrame) -> dict:
     For each ticker in prices_df, return:
         price, ret_1d, ret_5d, ret_20d, vol_20d (annualised)
     """
+    # Flatten MultiIndex columns if yfinance returned them (e.g. ('Close','AAPL'))
+    if isinstance(prices_df.columns, pd.MultiIndex):
+        prices_df = prices_df.xs("Close", axis=1, level=0) if "Close" in prices_df.columns.get_level_values(0) else prices_df
+        prices_df.columns = [c[1] if isinstance(c, tuple) else c for c in prices_df.columns]
+
     snap = {}
     for col in prices_df.columns:
         s = prices_df[col].dropna()
+        # Ensure s is a 1-D Series of scalars
+        if isinstance(s.iloc[0] if len(s) else None, pd.Series):
+            s = s.apply(lambda x: x.iloc[0] if isinstance(x, pd.Series) else x)
         r = s.pct_change().dropna()
         snap[col] = {
             "price":   round(float(s.iloc[-1]), 2)                          if len(s) >= 1  else None,
