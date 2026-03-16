@@ -313,14 +313,16 @@ def main():
             continue
 
         record_trade(
-            date_str    = DATE_STR,
-            action      = "BUY",
-            symbol      = ticker,
-            shares      = shares,
-            price       = price,
-            tc_bps      = TC_BPS,
-            reason      = f"Initialization: α={s['alpha']:+.4f}, rank #{selected.index(s)+1}/{len(selected)}",
-            agent       = "Init",
+            date_str     = DATE_STR,
+            action       = "BUY",
+            symbol       = ticker,
+            shares       = shares,
+            price        = price,
+            tc_bps       = TC_BPS,
+            reason       = f"Initialization: α={s['alpha']:+.4f}, rank #{selected.index(s)+1}/{len(selected)}",
+            agent        = "Init",
+            target_price = round(price * 1.15, 4),
+            stop_loss    = round(price * 0.92, 4),
         )
         cash_avail -= (value + tc)
         executed.append({**s, "shares": shares, "value": value, "tc": tc, "weight": w})
