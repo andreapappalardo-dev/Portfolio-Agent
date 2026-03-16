@@ -256,6 +256,12 @@ def run_risk_agent(
         if target_pct > MAX_POSITION_PCT:
             rejected.append((t, f"Target {target_pct*100:.0f}% > max {MAX_POSITION_PCT*100:.0f}%")); continue
         if action == "BUY":
+            # Check combined weight (existing + new) doesn't exceed cap
+            existing_pos = next((p for p in get_positions() if p["symbol"] == symbol), None)
+            existing_pct = (existing_pos["shares"] * price / total) if existing_pos else 0.0
+            combined_pct = existing_pct + target_pct
+            if combined_pct > MAX_POSITION_PCT + 0.001:
+                rejected.append((t, f"Combined weight {combined_pct*100:.1f}% > cap {MAX_POSITION_PCT*100:.0f}%")); continue
             required = target_pct * total
             if required > cash + 0.01:
                 rejected.append((t, f"Insufficient cash: need {format_dollar(required)}, "
