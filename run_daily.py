@@ -179,10 +179,15 @@ def run_strategy_agent(
         f"Holdings: {held_txt}. "
         f"Market snapshot: {mkt_compact}. "
         f"Competition ends {COMPETITION_END} (~{remaining} trade(s) left today, max {max_pct}% per position). "
-        "Use web search to find today's top market news, then propose up to 2 trades. "
+        "Use web search to find today's top market news. "
+        "IMPORTANT REBALANCING RULES: "
+        "1. If cash is insufficient to BUY a new position, you MUST first SELL a weaker existing holding to free up capital. "
+        "2. Propose the SELL before the BUY in your JSON so cash is available when the BUY executes. "
+        "3. To rotate: sell the holding with the weakest momentum or that has hit its stop-loss, then buy the better opportunity. "
+        "4. Max 2 trades total per day (a SELL + BUY counts as 2 trades). "
         "Be bold — maximise returns. Reply ONLY with reasoning + this JSON at the end:\n"
         "```json\n"
-        "[{\"action\":\"BUY\",\"symbol\":\"X\",\"target_pct\":0.25,\"reason\":\"..\"}]\n"
+        "[{\"action\":\"SELL\",\"symbol\":\"WEAK\",\"target_pct\":0.0,\"reason\":\"rotating out\"},{\"action\":\"BUY\",\"symbol\":\"X\",\"target_pct\":0.12,\"reason\":\"..\"}]\n"
         "```"
     )
 
@@ -256,6 +261,13 @@ def run_risk_agent(
             if required > cash + 0.01:
                 rejected.append((t, f"Insufficient cash: need {format_dollar(required)}, "
                                     f"have {format_dollar(cash)}")); continue
+            cash -= required  # update running cash so subsequent BUYs see correct balance
+        elif action == "SELL":
+            # Credit cash from this sell so subsequent BUYs can use it
+            position = next((p for p in __import__('database').get_positions()
+                             if p["symbol"] == symbol), None)
+            if position:
+                cash += position["shares"] * price
 
         approved.append(t)
 
