@@ -169,7 +169,14 @@ def run_strategy_agent(
     # Compact market table (prices + 5d return only) to stay under rate limits
     mkt_lines = []
     for t, m in market_snap.items():
-        r5 = f"{m['ret_5d']*100:+.1f}%" if m['ret_5d'] else "n/a"
+        # ret_5d from screener is already %; from portfolio_manager is decimal
+        r5_raw = m['ret_5d']
+        if r5_raw is None:
+            r5 = "n/a"
+        elif abs(r5_raw) > 2:  # already a percentage (e.g. 5.2 means 5.2%)
+            r5 = f"{r5_raw:+.1f}%"
+        else:  # decimal form (e.g. 0.052 means 5.2%)
+            r5 = f"{r5_raw*100:+.1f}%"
         mkt_lines.append(f"{t}: ${m['price']:.0f} (5d {r5})")
     mkt_compact = " | ".join(mkt_lines)
 
